@@ -631,6 +631,200 @@
         textSignaturePreview.style.fontFamily = `"${(signatureFontSelect.value || 'Pacifico').trim()}", cursive`;
     }
 
+    // ── Digital Signature Modal ──────────────────────────────────────────────
+
+    const openDigitalSignBtn = document.getElementById('openDigitalSignBtn');
+    const digitalSignModal = document.getElementById('digitalSignModal');
+    const digitalSignNameInput = document.getElementById('digitalSignName');
+    const digitalSignPreviewCanvas = document.getElementById('digitalSignPreviewCanvas');
+    const cancelDigitalSignBtn = document.getElementById('cancelDigitalSign');
+    const closeDigitalSignModalBtn = document.getElementById('closeDigitalSignModal');
+    const confirmDigitalSignBtn = document.getElementById('confirmDigitalSign');
+
+    const buildDigitalSignatureCanvas = async (name) => {
+        const font = 'Pacifico';
+
+        if (document.fonts && document.fonts.ready) {
+            await document.fonts.ready;
+            try {
+                await document.fonts.load(`52px "${font}"`);
+            } catch (_e) {
+                // fallback to cursive
+            }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 500;
+        canvas.height = 200;
+        const ctx = canvas.getContext('2d');
+
+        // Background
+        ctx.fillStyle = '#f0fdfa';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Outer border
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+
+        // Header band
+        ctx.fillStyle = '#164e63';
+        ctx.fillRect(0, 0, canvas.width, 44);
+
+        // Header label
+        ctx.fillStyle = '#a5f3fc';
+        ctx.font = 'bold 12px "Segoe UI", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('\u2713  SIGN\u00c9 NUM\u00c9RIQUEMENT PAR', 16, 22);
+
+        // Name
+        ctx.fillStyle = '#0c4a6e';
+        ctx.font = `52px "${font}", cursive`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(name, canvas.width / 2, 115);
+
+        // Separator
+        ctx.strokeStyle = '#a5f3fc';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(20, 152);
+        ctx.lineTo(canvas.width - 20, 152);
+        ctx.stroke();
+
+        // Date / info
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' });
+        const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+        ctx.fillStyle = '#475569';
+        ctx.font = '11px "Segoe UI", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(`Date : ${dateStr} \u00e0 ${timeStr}`, 20, 169);
+        ctx.fillText('Signature num\u00e9rique \u2014 Document authentifi\u00e9', 20, 187);
+
+        return canvas.toDataURL('image/png');
+    };
+
+    let digitalSignPreviewDataUrl = null;
+
+    const drawEmptyDigitalPreview = () => {
+        if (!digitalSignPreviewCanvas) {
+            return;
+        }
+
+        digitalSignPreviewCanvas.width = 500;
+        digitalSignPreviewCanvas.height = 200;
+        const ctx = digitalSignPreviewCanvas.getContext('2d');
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, 500, 200);
+        ctx.fillStyle = '#475569';
+        ctx.font = '14px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Entrez votre nom pour voir l\u2019aper\u00e7u', 250, 100);
+        digitalSignPreviewDataUrl = null;
+    };
+
+    const updateDigitalSignPreview = async () => {
+        if (!digitalSignPreviewCanvas) {
+            return;
+        }
+
+        const name = (digitalSignNameInput?.value || '').trim();
+        if (!name) {
+            drawEmptyDigitalPreview();
+            return;
+        }
+
+        const dataUrl = await buildDigitalSignatureCanvas(name);
+        digitalSignPreviewDataUrl = dataUrl;
+
+        const img = new Image();
+        img.onload = () => {
+            digitalSignPreviewCanvas.width = img.naturalWidth;
+            digitalSignPreviewCanvas.height = img.naturalHeight;
+            const ctx = digitalSignPreviewCanvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+        };
+        img.src = dataUrl;
+    };
+
+    const closeDigitalModal = () => {
+        digitalSignModal?.classList.add('hidden');
+        digitalSignModal?.classList.remove('flex');
+    };
+
+    const openDigitalModal = () => {
+        if (!digitalSignModal) {
+            return;
+        }
+
+        digitalSignModal.classList.remove('hidden');
+        digitalSignModal.classList.add('flex');
+        drawEmptyDigitalPreview();
+        digitalSignNameInput?.focus();
+    };
+
+    openDigitalSignBtn?.addEventListener('click', openDigitalModal);
+    cancelDigitalSignBtn?.addEventListener('click', closeDigitalModal);
+    closeDigitalSignModalBtn?.addEventListener('click', closeDigitalModal);
+
+    digitalSignModal?.addEventListener('click', (event) => {
+        if (event.target === digitalSignModal) {
+            closeDigitalModal();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && digitalSignModal && !digitalSignModal.classList.contains('hidden')) {
+            closeDigitalModal();
+        }
+    });
+
+    digitalSignNameInput?.addEventListener('input', () => {
+        updateDigitalSignPreview();
+    });
+
+    confirmDigitalSignBtn?.addEventListener('click', async () => {
+        const name = (digitalSignNameInput?.value || '').trim();
+        if (!name) {
+            digitalSignNameInput?.focus();
+            return;
+        }
+
+        const dataUrl = digitalSignPreviewDataUrl ?? (await buildDigitalSignatureCanvas(name));
+        const aspectRatio = await getImageAspectRatio(dataUrl);
+
+        const signature = {
+            id: `sig-${signatureCounter}`,
+            pageNumber: totalPages,
+            xRatio: 0.52,
+            yRatio: 0.78,
+            widthRatio: 0.42,
+            aspectRatio,
+            signatureData: dataUrl,
+        };
+
+        signatureCounter += 1;
+        signatures.push(signature);
+        selectedSignatureId = signature.id;
+
+        renderSignaturesLayer();
+        renderSignaturesList();
+        closeDigitalModal();
+
+        syncSignaturesField();
+        const submitButton = signForm.querySelector('button[type="submit"]');
+        if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.classList.add('opacity-70', 'cursor-not-allowed');
+        }
+        signForm.submit();
+    });
+
     setMode('draw');
     renderSignaturesList();
     loadPdf();
