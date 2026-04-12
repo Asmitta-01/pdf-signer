@@ -3,6 +3,7 @@
 {% block title %}Signature de PDF{% endblock %}
 
 {% block javascripts %}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
     <script src="{{ asset('js/signature.js') }}" defer></script>
 {% endblock %}
 
@@ -49,8 +50,19 @@
                         <h2 class="text-lg font-semibold text-white">2) Previsualisation</h2>
                         <span class="max-w-[60%] truncate rounded-lg bg-slate-800 px-3 py-1 text-xs text-slate-300">{{ originalName }}</span>
                     </div>
-                    <div class="overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
-                        <iframe title="PDF preview" src="{{ path('app_pdf_sign_preview') }}#toolbar=1" class="h-[75vh] w-full"></iframe>
+                    <p class="mb-3 text-sm text-slate-300">Clique pour placer ta signature. Tu peux la deplacer et la redimensionner avec la poignee.</p>
+                    <div id="pdfStage" data-pdf-url="{{ path('app_pdf_sign_preview') }}" class="relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-950">
+                        <canvas id="pdfCanvas" class="w-full"></canvas>
+
+                        <div id="signatureOverlay" class="absolute hidden select-none touch-none cursor-move border-2 border-cyan-300/80 bg-white/90 shadow-lg">
+                            <img id="overlaySignatureImage" alt="Signature positionnee" class="h-full w-full object-contain">
+                            <div id="signatureResizeHandle" class="absolute -bottom-2 -right-2 h-5 w-5 cursor-nwse-resize rounded-full border border-cyan-100 bg-cyan-400 shadow"></div>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex items-center justify-between rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-300">
+                        <button type="button" id="prevPageButton" class="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold hover:bg-slate-800">Page precedente</button>
+                        <span id="pageInfoLabel">Page 1 / 1</span>
+                        <button type="button" id="nextPageButton" class="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold hover:bg-slate-800">Page suivante</button>
                     </div>
                 </section>
 
@@ -60,6 +72,10 @@
 
                     <form id="signForm" action="{{ path('app_pdf_sign_sign') }}" method="post" class="mt-5 space-y-5">
                         <input type="hidden" id="signatureData" name="signatureData">
+                        <input type="hidden" id="pageNumber" name="pageNumber" value="1">
+                        <input type="hidden" id="xRatio" name="xRatio" value="0.65">
+                        <input type="hidden" id="yRatio" name="yRatio" value="0.75">
+                        <input type="hidden" id="widthRatio" name="widthRatio" value="0.3">
 
                         <div class="grid grid-cols-3 gap-2 rounded-xl bg-slate-950 p-2">
                             <button type="button" data-sign-mode="draw" class="sign-mode-btn rounded-lg bg-cyan-500/20 px-3 py-2 text-sm font-medium text-cyan-100">Dessin</button>
@@ -97,25 +113,9 @@
                             <p id="textSignaturePreview" class="mt-4 text-3xl text-white" style="font-family: 'Pacifico', cursive;"></p>
                         </div>
 
-                        <div class="grid gap-4 sm:grid-cols-2">
-                            <div>
-                                <label for="position" class="block text-sm font-medium text-slate-200">Position</label>
-                                <select id="position" name="position" class="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                                    <option value="bottom-right" selected>Bas droite</option>
-                                    <option value="bottom-left">Bas gauche</option>
-                                    <option value="top-right">Haut droite</option>
-                                    <option value="top-left">Haut gauche</option>
-                                    <option value="center">Centre</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label for="pageTarget" class="block text-sm font-medium text-slate-200">Page</label>
-                                <select id="pageTarget" name="pageTarget" class="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                                    <option value="last" selected>Derniere page</option>
-                                    <option value="first">Premiere page</option>
-                                </select>
-                            </div>
-                        </div>
+                        <p class="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+                            Place et redimensionne ta signature directement dans la preview a gauche.
+                        </p>
 
                         <div class="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
                             <p class="mb-2 text-xs uppercase tracking-wider text-slate-400">Apercu de la signature appliquee</p>

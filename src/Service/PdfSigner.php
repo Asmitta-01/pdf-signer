@@ -10,7 +10,6 @@ use Symfony\Component\Filesystem\Filesystem;
 
 final class PdfSigner
 {
-    private const SIGNATURE_WIDTH_RATIO = 0.3;
     private const PAGE_MARGIN = 12.0;
 
     public function __construct(
@@ -20,7 +19,14 @@ final class PdfSigner
     ) {
     }
 
-    public function sign(string $sourcePdfPath, string $signatureDataUri, string $position, string $pageTarget): string
+    public function sign(
+        string $sourcePdfPath,
+        string $signatureDataUri,
+        int $pageNumber,
+        float $xRatio,
+        float $yRatio,
+        float $widthRatio,
+    ): string
     {
         $signaturePath = $this->createSignatureImageFromDataUri($signatureDataUri);
         $signedDirectory = $this->projectDir . '/var/storage/signed';
@@ -30,10 +36,13 @@ final class PdfSigner
 
         $pdf = new Fpdi();
         $pageCount = $pdf->setSourceFile($sourcePdfPath);
-        $targetPageNumber = $pageTarget === 'last' ? $pageCount : 1;
+        $targetPageNumber = (int) $this->clamp((float) $pageNumber, 1.0, (float) $pageCount);
+        $xRatio = $this->clamp($xRatio, 0.0, 1.0);
+        $yRatio = $this->clamp($yRatio, 0.0, 1.0);
+        $widthRatio = $this->clamp($widthRatio, 0.05, 0.9);
 
         [$signatureOriginalWidth, $signatureOriginalHeight] = getimagesize($signaturePath) ?: [500, 200];
-        $signatureRatio = $signatureOriginalHeight / max($signatureOriginalWidth, 1);
+        $signatureRatio = $signatureOriginalHeight / max($signatureOriginalWidth, 1.0);
 
         for ($pageNumber = 1; $pageNumber <= $pageCount; ++$pageNumber) {
             $templateId = $pdf->importPage($pageNumber);
@@ -47,9 +56,20 @@ final class PdfSigner
                 continue;
             }
 
-            $signatureWidth = $templateSize['width'] * self::SIGNATURE_WIDTH_RATIO;
+            $signatureWidth = max(20.0, $templateSize['width'] * $widthRatio);
             $signatureHeight = $signatureWidth * $signatureRatio;
-            [$x, $y] = $this->resolvePosition($position, $templateSize['width'], $templateSize['height'], $signatureWidth, $signatureHeight);
+            $maxHeight = $templateSize['height'] - (2 * self::PAGE_MARGIN);
+
+            if ($signatureHeight > $maxHeight) {
+                $signatureHeight = $maxHeight;
+                $signatureWidth = $signatureHeight / max($signatureRatio, 0.01);
+            }
+
+            $x = $templateSize['width'] * $xRatio;
+            $y = $templateSize['height'] * $yRatio;
+
+            $x = $this->clamp($x, self::PAGE_MARGIN, $templateSize['width'] - $signatureWidth - self::PAGE_MARGIN);
+            $y = $this->clamp($y, self::PAGE_MARGIN, $templateSize['height'] - $signatureHeight - self::PAGE_MARGIN);
 
             $pdf->Image($signaturePath, $x, $y, $signatureWidth, $signatureHeight);
         }
@@ -83,24 +103,8 @@ final class PdfSigner
         return $signaturePath;
     }
 
-    /**
-     * @return array{0: float, 1: float}
-     */
-    private function resolvePosition(
-        string $position,
-        float $pageWidth,
-        float $pageHeight,
-        float $signatureWidth,
-        float $signatureHeight,
-    ): array {
-        $margin = self::PAGE_MARGIN;
-
-        return match ($position) {
-            'top-left' => [$margin, $margin],
-            'top-right' => [$pageWidth - $signatureWidth - $margin, $margin],
-            'bottom-left' => [$margin, $pageHeight - $signatureHeight - $margin],
-            'center' => [($pageWidth - $signatureWidth) / 2, ($pageHeight - $signatureHeight) / 2],
-            default => [$pageWidth - $signatureWidth - $margin, $pageHeight - $signatureHeight - $margin],
-        };
+    private function clamp(float $value, float $min, float $max): float
+    {
+        return max($min, min($max, $value));
     }
 }

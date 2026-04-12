@@ -122,8 +122,10 @@ final class PdfSignController extends AbstractController
         }
 
         $signatureData = trim((string) $request->request->get('signatureData'));
-        $position = (string) $request->request->get('position', 'bottom-right');
-        $pageTarget = (string) $request->request->get('pageTarget', 'last');
+        $pageNumber = max(1, (int) $request->request->get('pageNumber', 1));
+        $xRatio = (float) $request->request->get('xRatio', 0.65);
+        $yRatio = (float) $request->request->get('yRatio', 0.75);
+        $widthRatio = (float) $request->request->get('widthRatio', 0.3);
 
         if ($signatureData === '') {
             $this->addFlash('error', 'Ajoute une signature avant de continuer.');
@@ -131,16 +133,8 @@ final class PdfSignController extends AbstractController
             return $this->redirectToRoute('app_pdf_sign_index');
         }
 
-        if (!in_array($position, ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'], true)) {
-            $position = 'bottom-right';
-        }
-
-        if (!in_array($pageTarget, ['first', 'last'], true)) {
-            $pageTarget = 'last';
-        }
-
         try {
-            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $signatureData, $position, $pageTarget);
+            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $signatureData, $pageNumber, $xRatio, $yRatio, $widthRatio);
         } catch (\Throwable) {
             $this->addFlash('error', 'Impossible de signer ce PDF. Verifie la signature et reessaie.');
 
