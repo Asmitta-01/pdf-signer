@@ -123,7 +123,7 @@
         if (signatures.length === 0) {
             const empty = document.createElement('p');
             empty.className = 'rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-400';
-            empty.textContent = 'Aucune signature ajoutee.';
+            empty.textContent = 'Aucune signature ajoutée.';
             signaturesList.appendChild(empty);
             return;
         }
@@ -482,7 +482,7 @@
         const signatureData = await resolveCurrentSignatureData();
 
         if (!signatureData) {
-            window.alert('Prepare une signature valide avant de lajouter.');
+            window.alert('Prepare une signature valide avant de l’ajouter.');
             return;
         }
 
@@ -510,7 +510,7 @@
 
     removeSignatureButton.addEventListener('click', () => {
         if (!selectedSignatureId) {
-            window.alert('Selectionne une signature a supprimer.');
+            window.alert('Sélectionne une signature à supprimer.');
             return;
         }
 
@@ -609,7 +609,7 @@
         event.preventDefault();
 
         if (signatures.length === 0) {
-            window.alert('Ajoute au moins une signature avant de generer le PDF.');
+            window.alert('Ajoute au moins une signature avant de générer le PDF.');
             return;
         }
 

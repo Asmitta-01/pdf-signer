@@ -7,9 +7,9 @@ Application web Symfony pour signer des PDF avec une experience visuelle complet
 - signature par image
 - signature texte avec police handwriting
 - signatures multiples (ajout/suppression)
-- placement libre en live (deplacer + redimensionner)
+- placement libre en live (déplacer + redimensionner)
 
-## Fonctionnalites
+## Fonctionnalités
 
 - Upload d'un PDF (max 15 MB)
 - Preview du PDF dans l'interface
@@ -25,12 +25,12 @@ Application web Symfony pour signer des PDF avec une experience visuelle complet
     - Satisfy
 - Gestion de plusieurs signatures:
   - Ajouter une signature sur une page
-  - Selectionner une signature
-  - Deplacer la signature dans la preview
-  - Redimensionner la signature (poignee)
-  - Supprimer la signature selectionnee
+  - Sélectionner une signature
+  - Déplacer la signature dans la preview
+  - Redimensionner la signature (poignée)
+  - Supprimer la signature sélectionnée
   - Supprimer toutes les signatures
-- Export final du PDF signe en telechargement direct
+- Export final du PDF signe en téléchargement direct
 
 ## Stack technique
 
@@ -40,7 +40,7 @@ Application web Symfony pour signer des PDF avec une experience visuelle complet
 - PDF.js (preview canvas cote client)
 - FPDI + FPDF (incrustation des signatures cote serveur)
 
-## Prerequis
+## Prérequis
 
 - PHP >= 8.2
 - Composer >= 2
@@ -71,14 +71,14 @@ Tu peux ensuite ajuster `.env.local` si besoin (APP_ENV, APP_SECRET, etc.).
 
 ## Workflow de lancement
 
-### Option recommandee (Symfony CLI)
+### Option recommandée (Symfony CLI)
 
 ```bash
 cd app
 symfony serve
 ```
 
-Ouvrir ensuite l'URL affichee par Symfony CLI (souvent `https://127.0.0.1:8000`).
+Ouvrir ensuite l'URL affichée par Symfony CLI (par défaut `https://127.0.0.1:8000`).
 
 ### Option alternative (serveur PHP natif)
 
@@ -97,8 +97,8 @@ Puis ouvrir:
 2. Choisir le mode de signature (dessin, image, texte).
 3. Cliquer sur `Ajouter cette signature`.
 4. Positionner/redimensionner la signature dans la preview.
-5. Refaire les etapes 2-4 pour ajouter plusieurs signatures.
-6. Cliquer sur `Generer le PDF signe`.
+5. Refaire les étapes 2-4 pour ajouter plusieurs signatures.
+6. Cliquer sur `Générer le PDF signé`.
 
 ## Structure utile
 
@@ -109,6 +109,6 @@ Puis ouvrir:
 
 ## Notes
 
-- Les fichiers uploades sont stockes temporairement dans `var/storage/pdfs`.
-- Les rendus de signatures et PDF signes transitent par `var/storage/signatures` et `var/storage/signed`.
-- Le fichier signe est supprime du disque apres envoi au navigateur (`deleteFileAfterSend`).
+- Les fichiers uploadés sont stockés temporairement dans `var/storage/pdfs`.
+- Les rendus de signatures et PDF signés transitent par `var/storage/signatures` et `var/storage/signed`.
+- Le fichier signé est supprimé du disque après envoi au navigateur (`deleteFileAfterSend`).
