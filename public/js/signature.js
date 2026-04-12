@@ -6,13 +6,17 @@
 
     const pdfStage = document.getElementById('pdfStage');
     const pdfCanvas = document.getElementById('pdfCanvas');
+    const signaturesLayer = document.getElementById('signaturesLayer');
     const pageInfoLabel = document.getElementById('pageInfoLabel');
     const prevPageButton = document.getElementById('prevPageButton');
     const nextPageButton = document.getElementById('nextPageButton');
 
-    const signatureOverlay = document.getElementById('signatureOverlay');
-    const overlaySignatureImage = document.getElementById('overlaySignatureImage');
-    const signatureResizeHandle = document.getElementById('signatureResizeHandle');
+    const addSignatureButton = document.getElementById('addSignatureButton');
+    const removeSignatureButton = document.getElementById('removeSignatureButton');
+    const clearSignaturesButton = document.getElementById('clearSignaturesButton');
+    const signaturesList = document.getElementById('signaturesList');
+
+    const signaturesDataInput = document.getElementById('signaturesData');
 
     const modeButtons = Array.from(document.querySelectorAll('.sign-mode-btn'));
     const panels = {
@@ -28,40 +32,45 @@
     const signatureTextInput = document.getElementById('signatureText');
     const textSignaturePreview = document.getElementById('textSignaturePreview');
 
-    const signatureDataInput = document.getElementById('signatureData');
-    const pageNumberInput = document.getElementById('pageNumber');
-    const xRatioInput = document.getElementById('xRatio');
-    const yRatioInput = document.getElementById('yRatio');
-    const widthRatioInput = document.getElementById('widthRatio');
-
     const signatureLivePreview = document.getElementById('signatureLivePreview');
     const signaturePlaceholder = document.getElementById('signaturePlaceholder');
 
-    const drawContext = drawCanvas.getContext('2d');
     const pdfContext = pdfCanvas.getContext('2d');
+    const drawContext = drawCanvas.getContext('2d');
+
+    let pdfDoc = null;
+    let currentPage = 1;
+    let totalPages = 1;
 
     let currentMode = 'draw';
     let drawing = false;
     let hasDrawn = false;
     let imageSignatureData = null;
 
-    let pdfDoc = null;
-    let currentPage = 1;
-    let totalPages = 1;
+    let signatures = [];
+    let selectedSignatureId = null;
+    let interaction = null;
 
-    let renderedSignatureData = null;
-
-    const overlayState = {
-        xRatio: Number.parseFloat(xRatioInput.value || '0.65') || 0.65,
-        yRatio: Number.parseFloat(yRatioInput.value || '0.75') || 0.75,
-        widthRatio: Number.parseFloat(widthRatioInput.value || '0.3') || 0.3,
-        aspectRatio: 0.35,
-    };
-
-    let dragState = null;
-    let resizeState = null;
+    let signatureCounter = 1;
 
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+    const syncSignaturesField = () => {
+        if (signatures.length === 0) {
+            signaturesDataInput.value = '';
+            return;
+        }
+
+        const payload = signatures.map((signature) => ({
+            signatureData: signature.signatureData,
+            pageNumber: signature.pageNumber,
+            xRatio: Number(signature.xRatio.toFixed(6)),
+            yRatio: Number(signature.yRatio.toFixed(6)),
+            widthRatio: Number(signature.widthRatio.toFixed(6)),
+        }));
+
+        signaturesDataInput.value = JSON.stringify(payload);
+    };
 
     const updateLivePreview = (dataUrl) => {
         if (!dataUrl) {
@@ -75,173 +84,434 @@
         signaturePlaceholder.classList.add('hidden');
     };
 
-    const updateHiddenRatios = (x, y, width) => {
-        if (!pdfCanvas.width || !pdfCanvas.height) {
-            return;
+    const getSignatureById = (id) => signatures.find((signature) => signature.id === id) || null;
+
+    const computeDisplayRect = (signature) => {
+        let width = clamp(signature.widthRatio * pdfCanvas.width, 50, pdfCanvas.width * 0.9);
+        let height = width * signature.aspectRatio;
+
+        if (height > pdfCanvas.height * 0.9) {
+            height = pdfCanvas.height * 0.9;
+            width = height / Math.max(signature.aspectRatio, 0.01);
         }
 
-        overlayState.xRatio = x / pdfCanvas.width;
-        overlayState.yRatio = y / pdfCanvas.height;
-        overlayState.widthRatio = width / pdfCanvas.width;
-
-        xRatioInput.value = overlayState.xRatio.toFixed(6);
-        yRatioInput.value = overlayState.yRatio.toFixed(6);
-        widthRatioInput.value = overlayState.widthRatio.toFixed(6);
-    };
-
-    const applyOverlayFromRatios = () => {
-        if (!renderedSignatureData || !pdfCanvas.width || !pdfCanvas.height) {
-            signatureOverlay.classList.add('hidden');
-            return;
-        }
-
-        let width = clamp(overlayState.widthRatio * pdfCanvas.width, 60, pdfCanvas.width * 0.85);
-        let height = width * overlayState.aspectRatio;
-
-        if (height > pdfCanvas.height * 0.85) {
-            height = pdfCanvas.height * 0.85;
-            width = height / Math.max(overlayState.aspectRatio, 0.01);
-        }
-
-        let x = overlayState.xRatio * pdfCanvas.width;
-        let y = overlayState.yRatio * pdfCanvas.height;
+        let x = signature.xRatio * pdfCanvas.width;
+        let y = signature.yRatio * pdfCanvas.height;
 
         x = clamp(x, 0, pdfCanvas.width - width);
         y = clamp(y, 0, pdfCanvas.height - height);
 
-        signatureOverlay.style.width = `${width}px`;
-        signatureOverlay.style.height = `${height}px`;
-        signatureOverlay.style.left = `${x}px`;
-        signatureOverlay.style.top = `${y}px`;
-        signatureOverlay.classList.remove('hidden');
-
-        updateHiddenRatios(x, y, width);
+        return { x, y, width, height };
     };
 
-    const setSignatureOverlayAsset = (dataUrl) => {
-        renderedSignatureData = dataUrl;
-        updateLivePreview(dataUrl);
-
-        if (!dataUrl) {
-            signatureOverlay.classList.add('hidden');
-            return;
-        }
-
-        overlaySignatureImage.src = dataUrl;
-        signatureOverlay.classList.remove('hidden');
+    const normalizeFromRect = (signature, rect) => {
+        signature.xRatio = rect.x / pdfCanvas.width;
+        signature.yRatio = rect.y / pdfCanvas.height;
+        signature.widthRatio = rect.width / pdfCanvas.width;
     };
 
-    overlaySignatureImage.addEventListener('load', () => {
-        if (overlaySignatureImage.naturalWidth > 0) {
-            overlayState.aspectRatio = overlaySignatureImage.naturalHeight / overlaySignatureImage.naturalWidth;
-        }
-
-        applyOverlayFromRatios();
-    });
-
-    const placeOverlayAt = (x, y) => {
-        if (!renderedSignatureData) {
-            return;
-        }
-
-        const currentWidth = signatureOverlay.offsetWidth || (pdfCanvas.width * overlayState.widthRatio);
-        const currentHeight = signatureOverlay.offsetHeight || (currentWidth * overlayState.aspectRatio);
-
-        const clampedX = clamp(x, 0, pdfCanvas.width - currentWidth);
-        const clampedY = clamp(y, 0, pdfCanvas.height - currentHeight);
-
-        signatureOverlay.style.left = `${clampedX}px`;
-        signatureOverlay.style.top = `${clampedY}px`;
-
-        updateHiddenRatios(clampedX, clampedY, currentWidth);
+    const selectSignature = (signatureId) => {
+        selectedSignatureId = signatureId;
+        renderSignaturesLayer();
+        renderSignaturesList();
     };
 
-    pdfCanvas.addEventListener('click', (event) => {
-        if (!renderedSignatureData) {
+    const renderSignaturesList = () => {
+        signaturesList.innerHTML = '';
+
+        if (signatures.length === 0) {
+            const empty = document.createElement('p');
+            empty.className = 'rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-400';
+            empty.textContent = 'Aucune signature ajoutee.';
+            signaturesList.appendChild(empty);
             return;
         }
 
-        const rect = pdfCanvas.getBoundingClientRect();
-        const clickX = event.clientX - rect.left;
-        const clickY = event.clientY - rect.top;
+        signatures.forEach((signature, index) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs text-left transition';
 
-        const nextX = clickX - (signatureOverlay.offsetWidth / 2);
-        const nextY = clickY - (signatureOverlay.offsetHeight / 2);
+            const isSelected = signature.id === selectedSignatureId;
+            item.className += isSelected
+                ? ' border-cyan-300 bg-cyan-500/10 text-cyan-100'
+                : ' border-slate-700 bg-slate-900 text-slate-200';
 
-        placeOverlayAt(nextX, nextY);
-    });
+            item.innerHTML = `<span>Signature ${index + 1}</span><span class="text-[11px] opacity-80">Page ${signature.pageNumber}</span>`;
+            item.addEventListener('click', async () => {
+                selectedSignatureId = signature.id;
 
-    signatureOverlay.addEventListener('pointerdown', (event) => {
-        if (event.target === signatureResizeHandle || !renderedSignatureData) {
-            return;
-        }
+                if (currentPage !== signature.pageNumber) {
+                    currentPage = signature.pageNumber;
+                    await renderPdfPage();
+                    return;
+                }
 
-        event.preventDefault();
+                renderSignaturesLayer();
+                renderSignaturesList();
+            });
 
-        dragState = {
-            pointerX: event.clientX,
-            pointerY: event.clientY,
-            startX: signatureOverlay.offsetLeft,
-            startY: signatureOverlay.offsetTop,
-        };
-    });
+            signaturesList.appendChild(item);
+        });
+    };
 
-    signatureResizeHandle.addEventListener('pointerdown', (event) => {
-        if (!renderedSignatureData) {
-            return;
-        }
+    const renderSignaturesLayer = () => {
+        signaturesLayer.innerHTML = '';
 
-        event.preventDefault();
-        event.stopPropagation();
+        const pageSignatures = signatures.filter((signature) => signature.pageNumber === currentPage);
+        pageSignatures.forEach((signature) => {
+            const rect = computeDisplayRect(signature);
+            normalizeFromRect(signature, rect);
 
-        resizeState = {
-            pointerX: event.clientX,
-            startWidth: signatureOverlay.offsetWidth,
-            startX: signatureOverlay.offsetLeft,
-            startY: signatureOverlay.offsetTop,
-        };
-    });
+            const signatureElement = document.createElement('div');
+            signatureElement.className = 'absolute pointer-events-auto select-none touch-none cursor-move border-2 bg-white/90 shadow-lg';
+            signatureElement.classList.add(signature.id === selectedSignatureId ? 'border-cyan-300' : 'border-slate-300/70');
+            signatureElement.style.left = `${rect.x}px`;
+            signatureElement.style.top = `${rect.y}px`;
+            signatureElement.style.width = `${rect.width}px`;
+            signatureElement.style.height = `${rect.height}px`;
+            signatureElement.dataset.signatureId = signature.id;
+
+            const signatureImage = document.createElement('img');
+            signatureImage.src = signature.signatureData;
+            signatureImage.alt = 'Signature';
+            signatureImage.className = 'h-full w-full object-contain';
+
+            const resizeHandle = document.createElement('div');
+            resizeHandle.className = 'absolute -bottom-2 -right-2 h-5 w-5 cursor-nwse-resize rounded-full border border-cyan-100 bg-cyan-400 shadow';
+            resizeHandle.dataset.resizeHandle = '1';
+
+            signatureElement.appendChild(signatureImage);
+            signatureElement.appendChild(resizeHandle);
+
+            signatureElement.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                selectSignature(signature.id);
+
+                if (event.target instanceof HTMLElement && event.target.dataset.resizeHandle === '1') {
+                    interaction = {
+                        mode: 'resize',
+                        signatureId: signature.id,
+                        pointerX: event.clientX,
+                        startX: rect.x,
+                        startY: rect.y,
+                        startWidth: rect.width,
+                    };
+                    return;
+                }
+
+                interaction = {
+                    mode: 'move',
+                    signatureId: signature.id,
+                    pointerX: event.clientX,
+                    pointerY: event.clientY,
+                    startX: rect.x,
+                    startY: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                };
+            });
+
+            signaturesLayer.appendChild(signatureElement);
+        });
+
+        syncSignaturesField();
+    };
+
+    const moveSignature = (signature, nextX, nextY, width, height) => {
+        const x = clamp(nextX, 0, pdfCanvas.width - width);
+        const y = clamp(nextY, 0, pdfCanvas.height - height);
+        normalizeFromRect(signature, { x, y, width, height });
+    };
 
     window.addEventListener('pointermove', (event) => {
-        if (dragState) {
-            const deltaX = event.clientX - dragState.pointerX;
-            const deltaY = event.clientY - dragState.pointerY;
-            placeOverlayAt(dragState.startX + deltaX, dragState.startY + deltaY);
+        if (!interaction) {
             return;
         }
 
-        if (resizeState) {
-            const deltaX = event.clientX - resizeState.pointerX;
-            let nextWidth = clamp(resizeState.startWidth + deltaX, 60, pdfCanvas.width * 0.9);
-            let nextHeight = nextWidth * overlayState.aspectRatio;
+        const signature = getSignatureById(interaction.signatureId);
+        if (!signature || signature.pageNumber !== currentPage) {
+            return;
+        }
 
-            const maxWidthByBounds = pdfCanvas.width - resizeState.startX;
-            const maxHeightByBounds = pdfCanvas.height - resizeState.startY;
+        if (interaction.mode === 'move') {
+            const deltaX = event.clientX - interaction.pointerX;
+            const deltaY = event.clientY - interaction.pointerY;
 
-            if (nextWidth > maxWidthByBounds) {
-                nextWidth = maxWidthByBounds;
-                nextHeight = nextWidth * overlayState.aspectRatio;
+            moveSignature(
+                signature,
+                interaction.startX + deltaX,
+                interaction.startY + deltaY,
+                interaction.width,
+                interaction.height,
+            );
+
+            renderSignaturesLayer();
+            return;
+        }
+
+        if (interaction.mode === 'resize') {
+            const deltaX = event.clientX - interaction.pointerX;
+            let width = clamp(interaction.startWidth + deltaX, 50, pdfCanvas.width * 0.9);
+            let height = width * signature.aspectRatio;
+
+            const maxWidth = pdfCanvas.width - interaction.startX;
+            const maxHeight = pdfCanvas.height - interaction.startY;
+
+            if (width > maxWidth) {
+                width = maxWidth;
+                height = width * signature.aspectRatio;
             }
 
-            if (nextHeight > maxHeightByBounds) {
-                nextHeight = maxHeightByBounds;
-                nextWidth = nextHeight / Math.max(overlayState.aspectRatio, 0.01);
+            if (height > maxHeight) {
+                height = maxHeight;
+                width = height / Math.max(signature.aspectRatio, 0.01);
             }
 
-            signatureOverlay.style.width = `${nextWidth}px`;
-            signatureOverlay.style.height = `${nextHeight}px`;
+            normalizeFromRect(signature, {
+                x: interaction.startX,
+                y: interaction.startY,
+                width,
+                height,
+            });
 
-            updateHiddenRatios(resizeState.startX, resizeState.startY, nextWidth);
+            renderSignaturesLayer();
         }
     });
 
     window.addEventListener('pointerup', () => {
-        dragState = null;
-        resizeState = null;
+        interaction = null;
+    });
+
+    pdfCanvas.addEventListener('click', (event) => {
+        if (!selectedSignatureId) {
+            return;
+        }
+
+        const signature = getSignatureById(selectedSignatureId);
+        if (!signature || signature.pageNumber !== currentPage) {
+            return;
+        }
+
+        const rect = computeDisplayRect(signature);
+        const canvasRect = pdfCanvas.getBoundingClientRect();
+
+        const clickX = event.clientX - canvasRect.left;
+        const clickY = event.clientY - canvasRect.top;
+
+        moveSignature(signature, clickX - (rect.width / 2), clickY - (rect.height / 2), rect.width, rect.height);
+        renderSignaturesLayer();
+    });
+
+    const getImageAspectRatio = (dataUrl) => new Promise((resolve) => {
+        const image = new Image();
+        image.onload = () => {
+            if (!image.naturalWidth || !image.naturalHeight) {
+                resolve(0.35);
+                return;
+            }
+
+            resolve(image.naturalHeight / image.naturalWidth);
+        };
+
+        image.onerror = () => resolve(0.35);
+        image.src = dataUrl;
+    });
+
+    const buildTextSignature = async () => {
+        if (document.fonts && document.fonts.ready) {
+            await document.fonts.ready;
+        }
+
+        const signatureText = (signatureTextInput.value || '').trim();
+        if (!signatureText) {
+            return null;
+        }
+
+        const renderer = document.createElement('canvas');
+        const context = renderer.getContext('2d');
+
+        context.font = '82px Pacifico, cursive';
+        const measuredWidth = context.measureText(signatureText).width;
+
+        renderer.width = Math.max(360, Math.ceil(measuredWidth) + 120);
+        renderer.height = 220;
+
+        context.font = '82px Pacifico, cursive';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = '#111827';
+        context.fillText(signatureText, renderer.width / 2, renderer.height / 2);
+
+        return renderer.toDataURL('image/png');
+    };
+
+    const resolveCurrentSignatureData = async () => {
+        if (currentMode === 'draw') {
+            if (!hasDrawn) {
+                return null;
+            }
+
+            return drawCanvas.toDataURL('image/png');
+        }
+
+        if (currentMode === 'image') {
+            return imageSignatureData;
+        }
+
+        if (currentMode === 'text') {
+            return buildTextSignature();
+        }
+
+        return null;
+    };
+
+    const setMode = (mode) => {
+        currentMode = mode;
+
+        modeButtons.forEach((button) => {
+            const isActive = button.dataset.signMode === mode;
+            button.classList.toggle('bg-cyan-500/20', isActive);
+            button.classList.toggle('text-cyan-100', isActive);
+            button.classList.toggle('text-slate-300', !isActive);
+        });
+
+        Object.entries(panels).forEach(([key, panel]) => {
+            panel.classList.toggle('hidden', key !== mode);
+        });
+    };
+
+    modeButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            setMode(button.dataset.signMode || 'draw');
+        });
+    });
+
+    drawContext.lineWidth = 2.4;
+    drawContext.lineCap = 'round';
+    drawContext.lineJoin = 'round';
+    drawContext.strokeStyle = '#111827';
+
+    const drawCanvasPosition = (event) => {
+        const rect = drawCanvas.getBoundingClientRect();
+        const scaleX = drawCanvas.width / rect.width;
+        const scaleY = drawCanvas.height / rect.height;
+
+        return {
+            x: (event.clientX - rect.left) * scaleX,
+            y: (event.clientY - rect.top) * scaleY,
+        };
+    };
+
+    drawCanvas.addEventListener('pointerdown', (event) => {
+        drawing = true;
+        hasDrawn = true;
+
+        const { x, y } = drawCanvasPosition(event);
+        drawContext.beginPath();
+        drawContext.moveTo(x, y);
+    });
+
+    drawCanvas.addEventListener('pointermove', (event) => {
+        if (!drawing) {
+            return;
+        }
+
+        const { x, y } = drawCanvasPosition(event);
+        drawContext.lineTo(x, y);
+        drawContext.stroke();
+    });
+
+    window.addEventListener('pointerup', () => {
+        drawing = false;
 
         if (currentMode === 'draw' && hasDrawn) {
-            setSignatureOverlayAsset(drawCanvas.toDataURL('image/png'));
+            updateLivePreview(drawCanvas.toDataURL('image/png'));
         }
+    });
+
+    clearDrawCanvasButton.addEventListener('click', () => {
+        drawContext.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+        hasDrawn = false;
+        updateLivePreview(null);
+    });
+
+    signatureImageInput.addEventListener('change', () => {
+        const [file] = signatureImageInput.files || [];
+
+        if (!file) {
+            imageSignatureData = null;
+            signatureImagePreview.classList.add('hidden');
+            updateLivePreview(null);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            imageSignatureData = typeof reader.result === 'string' ? reader.result : null;
+            if (!imageSignatureData) {
+                return;
+            }
+
+            signatureImagePreview.src = imageSignatureData;
+            signatureImagePreview.classList.remove('hidden');
+            updateLivePreview(imageSignatureData);
+        };
+
+        reader.readAsDataURL(file);
+    });
+
+    signatureTextInput.addEventListener('input', () => {
+        textSignaturePreview.textContent = (signatureTextInput.value || '').trim();
+    });
+
+    const addSignature = async () => {
+        const signatureData = await resolveCurrentSignatureData();
+
+        if (!signatureData) {
+            window.alert('Prepare une signature valide avant de lajouter.');
+            return;
+        }
+
+        const aspectRatio = await getImageAspectRatio(signatureData);
+        const signature = {
+            id: `sig-${signatureCounter}`,
+            pageNumber: currentPage,
+            xRatio: 0.6,
+            yRatio: 0.75,
+            widthRatio: 0.28,
+            aspectRatio,
+            signatureData,
+        };
+
+        signatureCounter += 1;
+        signatures.push(signature);
+
+        selectedSignatureId = signature.id;
+        updateLivePreview(signatureData);
+        renderSignaturesLayer();
+        renderSignaturesList();
+    };
+
+    addSignatureButton.addEventListener('click', addSignature);
+
+    removeSignatureButton.addEventListener('click', () => {
+        if (!selectedSignatureId) {
+            window.alert('Selectionne une signature a supprimer.');
+            return;
+        }
+
+        signatures = signatures.filter((signature) => signature.id !== selectedSignatureId);
+        selectedSignatureId = null;
+        renderSignaturesLayer();
+        renderSignaturesList();
+    });
+
+    clearSignaturesButton.addEventListener('click', () => {
+        signatures = [];
+        selectedSignatureId = null;
+        renderSignaturesLayer();
+        renderSignaturesList();
     });
 
     const renderPdfPage = async () => {
@@ -263,14 +533,14 @@
         await page.render({ canvasContext: pdfContext, viewport }).promise;
 
         pageInfoLabel.textContent = `Page ${currentPage} / ${totalPages}`;
-        pageNumberInput.value = String(currentPage);
 
         prevPageButton.disabled = currentPage <= 1;
         nextPageButton.disabled = currentPage >= totalPages;
         prevPageButton.classList.toggle('opacity-40', currentPage <= 1);
         nextPageButton.classList.toggle('opacity-40', currentPage >= totalPages);
 
-        applyOverlayFromRatios();
+        renderSignaturesLayer();
+        renderSignaturesList();
     };
 
     const loadPdf = async () => {
@@ -322,203 +592,21 @@
         });
     });
 
-    drawContext.lineWidth = 2.4;
-    drawContext.lineCap = 'round';
-    drawContext.lineJoin = 'round';
-    drawContext.strokeStyle = '#111827';
-
-    const drawCanvasPosition = (event) => {
-        const rect = drawCanvas.getBoundingClientRect();
-        const scaleX = drawCanvas.width / rect.width;
-        const scaleY = drawCanvas.height / rect.height;
-
-        return {
-            x: (event.clientX - rect.left) * scaleX,
-            y: (event.clientY - rect.top) * scaleY,
-        };
-    };
-
-    drawCanvas.addEventListener('pointerdown', (event) => {
-        drawing = true;
-        hasDrawn = true;
-
-        const { x, y } = drawCanvasPosition(event);
-        drawContext.beginPath();
-        drawContext.moveTo(x, y);
-    });
-
-    drawCanvas.addEventListener('pointermove', (event) => {
-        if (!drawing) {
-            return;
-        }
-
-        const { x, y } = drawCanvasPosition(event);
-        drawContext.lineTo(x, y);
-        drawContext.stroke();
-    });
-
-    clearDrawCanvasButton.addEventListener('click', () => {
-        drawContext.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-        hasDrawn = false;
-
-        if (currentMode === 'draw') {
-            setSignatureOverlayAsset(null);
-        }
-    });
-
-    signatureImageInput.addEventListener('change', () => {
-        const [file] = signatureImageInput.files || [];
-
-        if (!file) {
-            imageSignatureData = null;
-            signatureImagePreview.classList.add('hidden');
-
-            if (currentMode === 'image') {
-                setSignatureOverlayAsset(null);
-            }
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = () => {
-            imageSignatureData = typeof reader.result === 'string' ? reader.result : null;
-            if (!imageSignatureData) {
-                return;
-            }
-
-            signatureImagePreview.src = imageSignatureData;
-            signatureImagePreview.classList.remove('hidden');
-
-            if (currentMode === 'image') {
-                setSignatureOverlayAsset(imageSignatureData);
-            }
-        };
-
-        reader.readAsDataURL(file);
-    });
-
-    const buildTextSignature = async () => {
-        if (document.fonts && document.fonts.ready) {
-            await document.fonts.ready;
-        }
-
-        const signatureText = (signatureTextInput.value || '').trim();
-        if (!signatureText) {
-            return null;
-        }
-
-        const renderer = document.createElement('canvas');
-        const context = renderer.getContext('2d');
-
-        context.font = '82px Pacifico, cursive';
-        const measuredWidth = context.measureText(signatureText).width;
-
-        renderer.width = Math.max(360, Math.ceil(measuredWidth) + 120);
-        renderer.height = 220;
-
-        context.font = '82px Pacifico, cursive';
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.fillStyle = '#111827';
-        context.fillText(signatureText, renderer.width / 2, renderer.height / 2);
-
-        return renderer.toDataURL('image/png');
-    };
-
-    let textPreviewTimer = null;
-    signatureTextInput.addEventListener('input', () => {
-        const value = (signatureTextInput.value || '').trim();
-        textSignaturePreview.textContent = value;
-
-        if (currentMode !== 'text') {
-            return;
-        }
-
-        if (textPreviewTimer) {
-            window.clearTimeout(textPreviewTimer);
-        }
-
-        textPreviewTimer = window.setTimeout(async () => {
-            const data = await buildTextSignature();
-            setSignatureOverlayAsset(data);
-        }, 100);
-    });
-
-    const setMode = async (mode) => {
-        currentMode = mode;
-
-        modeButtons.forEach((button) => {
-            const isActive = button.dataset.signMode === mode;
-            button.classList.toggle('bg-cyan-500/20', isActive);
-            button.classList.toggle('text-cyan-100', isActive);
-            button.classList.toggle('text-slate-300', !isActive);
-        });
-
-        Object.entries(panels).forEach(([key, panel]) => {
-            panel.classList.toggle('hidden', key !== mode);
-        });
-
-        if (mode === 'draw') {
-            setSignatureOverlayAsset(hasDrawn ? drawCanvas.toDataURL('image/png') : null);
-            return;
-        }
-
-        if (mode === 'image') {
-            setSignatureOverlayAsset(imageSignatureData);
-            return;
-        }
-
-        if (mode === 'text') {
-            const textData = await buildTextSignature();
-            setSignatureOverlayAsset(textData);
-        }
-    };
-
-    modeButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-            setMode(button.dataset.signMode || 'draw');
-        });
-    });
-
-    const resolveSignatureData = async () => {
-        if (currentMode === 'draw') {
-            return hasDrawn ? drawCanvas.toDataURL('image/png') : null;
-        }
-
-        if (currentMode === 'image') {
-            return imageSignatureData;
-        }
-
-        if (currentMode === 'text') {
-            return buildTextSignature();
-        }
-
-        return null;
-    };
-
     signForm.addEventListener('submit', async (event) => {
         event.preventDefault();
+
+        if (signatures.length === 0) {
+            window.alert('Ajoute au moins une signature avant de generer le PDF.');
+            return;
+        }
+
+        syncSignaturesField();
 
         const submitButton = signForm.querySelector('button[type="submit"]');
         submitButton.disabled = true;
         submitButton.classList.add('opacity-70', 'cursor-not-allowed');
 
         try {
-            const signatureData = await resolveSignatureData();
-
-            if (!signatureData) {
-                window.alert('Ajoute une signature valide avant de continuer.');
-                return;
-            }
-
-            setSignatureOverlayAsset(signatureData);
-            signatureDataInput.value = signatureData;
-
-            if (signatureOverlay.classList.contains('hidden')) {
-                window.alert('Place ta signature sur le PDF avant de generer le fichier.');
-                return;
-            }
-
             signForm.submit();
         } finally {
             submitButton.disabled = false;
@@ -527,5 +615,6 @@
     });
 
     setMode('draw');
+    renderSignaturesList();
     loadPdf();
 })();

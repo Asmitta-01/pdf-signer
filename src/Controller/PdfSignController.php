@@ -121,20 +121,24 @@ final class PdfSignController extends AbstractController
             return $this->redirectToRoute('app_pdf_sign_index');
         }
 
-        $signatureData = trim((string) $request->request->get('signatureData'));
-        $pageNumber = max(1, (int) $request->request->get('pageNumber', 1));
-        $xRatio = (float) $request->request->get('xRatio', 0.65);
-        $yRatio = (float) $request->request->get('yRatio', 0.75);
-        $widthRatio = (float) $request->request->get('widthRatio', 0.3);
+        $signaturesData = (string) $request->request->get('signaturesData', '');
 
-        if ($signatureData === '') {
-            $this->addFlash('error', 'Ajoute une signature avant de continuer.');
+        if ($signaturesData === '') {
+            $this->addFlash('error', 'Ajoute au moins une signature avant de continuer.');
 
             return $this->redirectToRoute('app_pdf_sign_index');
         }
 
         try {
-            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $signatureData, $pageNumber, $xRatio, $yRatio, $widthRatio);
+            $decodedSignatures = json_decode($signaturesData, true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($decodedSignatures) || $decodedSignatures === []) {
+                $this->addFlash('error', 'Ajoute au moins une signature avant de continuer.');
+
+                return $this->redirectToRoute('app_pdf_sign_index');
+            }
+
+            /** @var array<int, array<string, mixed>> $decodedSignatures */
+            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $decodedSignatures);
         } catch (\Throwable) {
             $this->addFlash('error', 'Impossible de signer ce PDF. Verifie la signature et reessaie.');
 
