@@ -30,6 +30,7 @@
     const signatureImageInput = document.getElementById('signatureImage');
     const signatureImagePreview = document.getElementById('signatureImagePreview');
     const signatureTextInput = document.getElementById('signatureText');
+    const signatureFontSelect = document.getElementById('signatureFont');
     const textSignaturePreview = document.getElementById('textSignaturePreview');
 
     const signatureLivePreview = document.getElementById('signatureLivePreview');
@@ -319,8 +320,15 @@
     });
 
     const buildTextSignature = async () => {
+        const selectedFont = (signatureFontSelect?.value || 'Pacifico').trim();
+
         if (document.fonts && document.fonts.ready) {
             await document.fonts.ready;
+            try {
+                await document.fonts.load(`82px "${selectedFont}"`);
+            } catch (error) {
+                // Ignore and fallback to cursive if a font cannot be loaded at runtime.
+            }
         }
 
         const signatureText = (signatureTextInput.value || '').trim();
@@ -331,13 +339,13 @@
         const renderer = document.createElement('canvas');
         const context = renderer.getContext('2d');
 
-        context.font = '82px Pacifico, cursive';
+        context.font = `82px "${selectedFont}", cursive`;
         const measuredWidth = context.measureText(signatureText).width;
 
         renderer.width = Math.max(360, Math.ceil(measuredWidth) + 120);
         renderer.height = 220;
 
-        context.font = '82px Pacifico, cursive';
+        context.font = `82px "${selectedFont}", cursive`;
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillStyle = '#111827';
@@ -463,6 +471,11 @@
 
     signatureTextInput.addEventListener('input', () => {
         textSignaturePreview.textContent = (signatureTextInput.value || '').trim();
+        textSignaturePreview.style.fontFamily = `"${(signatureFontSelect?.value || 'Pacifico').trim()}", cursive`;
+    });
+
+    signatureFontSelect?.addEventListener('change', () => {
+        textSignaturePreview.style.fontFamily = `"${(signatureFontSelect.value || 'Pacifico').trim()}", cursive`;
     });
 
     const addSignature = async () => {
@@ -613,6 +626,10 @@
             submitButton.classList.remove('opacity-70', 'cursor-not-allowed');
         }
     });
+
+    if (signatureFontSelect) {
+        textSignaturePreview.style.fontFamily = `"${(signatureFontSelect.value || 'Pacifico').trim()}", cursive`;
+    }
 
     setMode('draw');
     renderSignaturesList();
