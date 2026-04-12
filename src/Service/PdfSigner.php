@@ -239,8 +239,8 @@ final class PdfSigner
         $y2 = $y1 + $lineH;
         $y3 = $y2 + $lineH;
 
-        imagestring($img, 2, $textX, $y1, '✓ Signature numérique', $labelColor);
-        imagestring($img, 3, $textX, $y2, $nameDisplay, $nameColor);
+        imagestring($img, 2, $textX, $y1, '>> Signature numerique', $labelColor);
+        imagestring($img, 3, $textX, $y2, $this->toAscii($nameDisplay), $nameColor);
         imagestring($img, 1, $textX, $y3, date('d/m/Y H:i'), $dateColor);
 
         $signaturesDir = $this->projectDir . '/var/storage/signatures';
@@ -251,6 +251,58 @@ final class PdfSigner
         imagedestroy($img);
 
         return $badgePath;
+    }
+
+    private function toAscii(string $text): string
+    {
+        $map = [
+            'à' => 'a',
+            'â' => 'a',
+            'ä' => 'a',
+            'á' => 'a',
+            'ã' => 'a',
+            'è' => 'e',
+            'ê' => 'e',
+            'ë' => 'e',
+            'é' => 'e',
+            'î' => 'i',
+            'ï' => 'i',
+            'í' => 'i',
+            'ì' => 'i',
+            'ô' => 'o',
+            'ö' => 'o',
+            'ó' => 'o',
+            'ò' => 'o',
+            'õ' => 'o',
+            'ù' => 'u',
+            'û' => 'u',
+            'ü' => 'u',
+            'ú' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            'À' => 'A',
+            'Â' => 'A',
+            'Ä' => 'A',
+            'Á' => 'A',
+            'È' => 'E',
+            'Ê' => 'E',
+            'Ë' => 'E',
+            'É' => 'E',
+            'Î' => 'I',
+            'Ï' => 'I',
+            'Í' => 'I',
+            'Ô' => 'O',
+            'Ö' => 'O',
+            'Ó' => 'O',
+            'Ù' => 'U',
+            'Û' => 'U',
+            'Ü' => 'U',
+            'Ú' => 'U',
+            'Ç' => 'C',
+            'Ñ' => 'N',
+        ];
+
+        return strtr($text, $map);
     }
 
     /**
