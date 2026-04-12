@@ -27,8 +27,7 @@ final class PdfSignController extends AbstractController
         private readonly string $projectDir,
         private readonly PdfSigner $pdfSigner,
         private readonly Filesystem $filesystem,
-    ) {
-    }
+    ) {}
 
     #[Route('/', name: 'app_pdf_sign_index', methods: ['GET'])]
     public function index(SessionInterface $session): Response
@@ -122,23 +121,46 @@ final class PdfSignController extends AbstractController
         }
 
         $signaturesData = (string) $request->request->get('signaturesData', '');
+        $rawSignerName = (string) $request->request->get('digitalSignerName', '');
+        $signerName = $rawSignerName !== '' ? mb_substr(strip_tags($rawSignerName), 0, 128) : null;
 
-        if ($signaturesData === '') {
+        // Require at least one visual signature OR a digital signature
+        if ($signaturesData === '' && $signerName === null) {
             $this->addFlash('error', 'Ajoute au moins une signature avant de continuer.');
 
             return $this->redirectToRoute('app_pdf_sign_index');
         }
 
+        $digitalPosition = null;
+        if ($signerName !== null) {
+            $rawPage = $request->request->get('digitalSignPage', '');
+            $rawX = $request->request->get('digitalSignXRatio', '');
+            $rawY = $request->request->get('digitalSignYRatio', '');
+            $rawW = $request->request->get('digitalSignWidthRatio', '');
+
+            if ($rawPage !== '' && $rawX !== '' && $rawY !== '' && $rawW !== '') {
+                $digitalPosition = [
+                    'page' => max(1, (int) $rawPage),
+                    'xRatio' => (float) $rawX,
+                    'yRatio' => (float) $rawY,
+                    'widthRatio' => (float) $rawW,
+                ];
+            }
+        }
+
         try {
-            $decodedSignatures = json_decode($signaturesData, true, 512, JSON_THROW_ON_ERROR);
-            if (!is_array($decodedSignatures) || $decodedSignatures === []) {
+            $decodedSignatures = $signaturesData !== ''
+                ? json_decode($signaturesData, true, 512, JSON_THROW_ON_ERROR)
+                : [];
+
+            if (!is_array($decodedSignatures)) {
                 $this->addFlash('error', 'Ajoute au moins une signature avant de continuer.');
 
                 return $this->redirectToRoute('app_pdf_sign_index');
             }
 
             /** @var array<int, array<string, mixed>> $decodedSignatures */
-            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $decodedSignatures);
+            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $decodedSignatures, $signerName, $digitalPosition);
         } catch (\Throwable) {
             $this->addFlash('error', 'Impossible de signer ce PDF. Verifie la signature et reessaie.');
 

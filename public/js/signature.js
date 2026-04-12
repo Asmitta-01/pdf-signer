@@ -54,6 +54,9 @@
 
     let signatureCounter = 1;
 
+    // Late-bound renderer for the digital sig overlay (defined later in the file)
+    let digitalSigOverlayRenderer = null;
+
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
     const syncSignaturesField = () => {
@@ -217,6 +220,7 @@
         });
 
         syncSignaturesField();
+        digitalSigOverlayRenderer?.();
     };
 
     const moveSignature = (signature, nextX, nextY, width, height) => {
@@ -226,6 +230,27 @@
     };
 
     window.addEventListener('pointermove', (event) => {
+        // ── Digital sig move/resize ──────────────────────────────────────────
+        if (window._digitalSigInteraction && window._digitalSig) {
+            const dsI = window._digitalSigInteraction;
+            const ds = window._digitalSig;
+
+            if (dsI.mode === 'move') {
+                const deltaX = event.clientX - dsI.pointerX;
+                const deltaY = event.clientY - dsI.pointerY;
+                ds.xRatio = clamp(dsI.startX + deltaX, 0, pdfCanvas.width - dsI.width) / pdfCanvas.width;
+                ds.yRatio = clamp(dsI.startY + deltaY, 0, pdfCanvas.height - dsI.height) / pdfCanvas.height;
+            } else if (dsI.mode === 'resize') {
+                const deltaX = event.clientX - dsI.pointerX;
+                const newW = clamp(dsI.startWidth + deltaX, 80, pdfCanvas.width * 0.9);
+                ds.widthRatio = newW / pdfCanvas.width;
+            }
+
+            digitalSigOverlayRenderer?.();
+            return;
+        }
+
+        // ── Regular signature move/resize ────────────────────────────────────
         if (!interaction) {
             return;
         }
@@ -282,6 +307,7 @@
 
     window.addEventListener('pointerup', () => {
         interaction = null;
+        window._digitalSigInteraction = null;
     });
 
     pdfCanvas.addEventListener('click', (event) => {
@@ -608,9 +634,35 @@
     signForm.addEventListener('submit', async (event) => {
         event.preventDefault();
 
-        if (signatures.length === 0) {
+        const digitalEnabled = document.getElementById('enableDigitalSign')?.checked ?? false;
+
+        if (signatures.length === 0 && !digitalEnabled) {
             window.alert('Ajoute au moins une signature avant de générer le PDF.');
             return;
+        }
+
+        if (digitalEnabled) {
+            const nameInput = document.getElementById('digitalSignNameInline');
+            const name = (nameInput?.value || '').trim();
+            if (!name) {
+                nameInput?.focus();
+                window.alert('Entrez votre nom pour la signature numérique.');
+                return;
+            }
+
+            const digitalSignerNameInput = document.getElementById('digitalSignerName');
+            if (digitalSignerNameInput) {
+                digitalSignerNameInput.value = name;
+            }
+
+            // Write position fields from current digital sig state
+            if (window._digitalSig) {
+                const ds = window._digitalSig;
+                document.getElementById('digitalSignPage').value = String(ds.pageNumber);
+                document.getElementById('digitalSignXRatio').value = ds.xRatio.toFixed(6);
+                document.getElementById('digitalSignYRatio').value = ds.yRatio.toFixed(6);
+                document.getElementById('digitalSignWidthRatio').value = ds.widthRatio.toFixed(6);
+            }
         }
 
         syncSignaturesField();
@@ -627,205 +679,198 @@
         }
     });
 
-    if (signatureFontSelect) {
-        textSignaturePreview.style.fontFamily = `"${(signatureFontSelect.value || 'Pacifico').trim()}", cursive`;
-    }
+    // ── Digital Signature – checkbox + draggable overlay ────────────────────
 
-    // ── Digital Signature Modal ──────────────────────────────────────────────
+    window._digitalSig = null;         // { pageNumber, xRatio, yRatio, widthRatio }
+    window._digitalSigInteraction = null;
 
-    const openDigitalSignBtn = document.getElementById('openDigitalSignBtn');
-    const digitalSignModal = document.getElementById('digitalSignModal');
-    const digitalSignNameInput = document.getElementById('digitalSignName');
-    const digitalSignPreviewCanvas = document.getElementById('digitalSignPreviewCanvas');
-    const cancelDigitalSignBtn = document.getElementById('cancelDigitalSign');
-    const closeDigitalSignModalBtn = document.getElementById('closeDigitalSignModal');
-    const confirmDigitalSignBtn = document.getElementById('confirmDigitalSign');
+    const enableDigitalSignCheckbox = document.getElementById('enableDigitalSign');
+    const digitalSignFieldsDiv = document.getElementById('digitalSignFields');
+    const digitalSignNameInlineInput = document.getElementById('digitalSignNameInline');
 
-    const buildDigitalSignatureCanvas = async (name) => {
-        const font = 'Pacifico';
+    const syncDigitalSigPositionFields = () => {
+        const ds = window._digitalSig;
+        document.getElementById('digitalSignPage').value = ds ? String(ds.pageNumber) : '';
+        document.getElementById('digitalSignXRatio').value = ds ? ds.xRatio.toFixed(6) : '';
+        document.getElementById('digitalSignYRatio').value = ds ? ds.yRatio.toFixed(6) : '';
+        document.getElementById('digitalSignWidthRatio').value = ds ? ds.widthRatio.toFixed(6) : '';
+    };
 
-        if (document.fonts && document.fonts.ready) {
-            await document.fonts.ready;
-            try {
-                await document.fonts.load(`52px "${font}"`);
-            } catch (_e) {
-                // fallback to cursive
-            }
+    const renderDigitalSigOverlay = () => {
+        // Remove old overlay
+        signaturesLayer.querySelector('[data-digital-sig]')?.remove();
+
+        const ds = window._digitalSig;
+        if (!ds || ds.pageNumber !== currentPage) {
+            return;
         }
 
-        const canvas = document.createElement('canvas');
-        canvas.width = 500;
-        canvas.height = 200;
-        const ctx = canvas.getContext('2d');
+        const name = (digitalSignNameInlineInput?.value || '').trim() || 'Nom du signataire';
 
-        // Background
-        ctx.fillStyle = '#f0fdfa';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        let width = clamp(ds.widthRatio * pdfCanvas.width, 80, pdfCanvas.width * 0.9);
+        const aspectRatio = 0.28;
+        let height = width * aspectRatio;
+        let x = clamp(ds.xRatio * pdfCanvas.width, 0, pdfCanvas.width - width);
+        let y = clamp(ds.yRatio * pdfCanvas.height, 0, pdfCanvas.height - height);
 
-        // Outer border
-        ctx.strokeStyle = '#22d3ee';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+        // Persist clamped ratios
+        ds.xRatio = x / pdfCanvas.width;
+        ds.yRatio = y / pdfCanvas.height;
+        ds.widthRatio = width / pdfCanvas.width;
+        syncDigitalSigPositionFields();
 
-        // Header band
-        ctx.fillStyle = '#164e63';
-        ctx.fillRect(0, 0, canvas.width, 44);
+        const overlay = document.createElement('div');
+        overlay.dataset.digitalSig = '1';
+        Object.assign(overlay.style, {
+            position: 'absolute',
+            left: `${x}px`,
+            top: `${y}px`,
+            width: `${width}px`,
+            height: `${height}px`,
+            cursor: 'move',
+            pointerEvents: 'auto',
+            userSelect: 'none',
+            touchAction: 'none',
+        });
 
-        // Header label
-        ctx.fillStyle = '#a5f3fc';
-        ctx.font = 'bold 12px "Segoe UI", sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('\u2713  SIGN\u00c9 NUM\u00c9RIQUEMENT PAR', 16, 22);
+        // Badge canvas
+        const badgeCanvas = document.createElement('canvas');
+        badgeCanvas.width = Math.round(width * 2);   // 2× for sharpness
+        badgeCanvas.height = Math.round(height * 2);
+        badgeCanvas.style.width = '100%';
+        badgeCanvas.style.height = '100%';
+        badgeCanvas.style.display = 'block';
+        badgeCanvas.style.pointerEvents = 'none';
+        badgeCanvas.style.borderRadius = '3px';
 
-        // Name
-        ctx.fillStyle = '#0c4a6e';
-        ctx.font = `52px "${font}", cursive`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(name, canvas.width / 2, 115);
+        const bCtx = badgeCanvas.getContext('2d');
+        const bW = badgeCanvas.width;
+        const bH = badgeCanvas.height;
 
-        // Separator
-        ctx.strokeStyle = '#a5f3fc';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(20, 152);
-        ctx.lineTo(canvas.width - 20, 152);
-        ctx.stroke();
+        // White background
+        bCtx.fillStyle = '#f8fafc';
+        bCtx.fillRect(0, 0, bW, bH);
 
-        // Date / info
+        // Left cyan accent bar
+        const barW = Math.max(4, Math.round(bW * 0.02));
+        bCtx.fillStyle = '#22d3ee';
+        bCtx.fillRect(0, 0, barW, bH);
+
+        // Thin outer border
+        bCtx.strokeStyle = '#cbd5e1';
+        bCtx.lineWidth = 1.5;
+        bCtx.strokeRect(0.75, 0.75, bW - 1.5, bH - 1.5);
+
+        const textX = barW + Math.round(bW * 0.03);
         const now = new Date();
-        const dateStr = now.toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' });
-        const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+            + ' ' + now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-        ctx.fillStyle = '#475569';
-        ctx.font = '11px "Segoe UI", sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillText(`Date : ${dateStr} \u00e0 ${timeStr}`, 20, 169);
-        ctx.fillText('Signature num\u00e9rique \u2014 Document authentifi\u00e9', 20, 187);
+        // Line 1: label
+        bCtx.fillStyle = '#475569';
+        bCtx.font = `bold ${Math.round(bH * 0.22)}px "Segoe UI", sans-serif`;
+        bCtx.textBaseline = 'top';
+        bCtx.fillText('✓ Signature numérique', textX, Math.round(bH * 0.08));
 
-        return canvas.toDataURL('image/png');
+        // Line 2: name (truncated)
+        const maxChars = Math.floor(bW / (bH * 0.14));
+        const nameDisplay = name.length > maxChars ? name.slice(0, maxChars - 1) + '…' : name;
+        bCtx.fillStyle = '#0f172a';
+        bCtx.font = `${Math.round(bH * 0.28)}px Georgia, serif`;
+        bCtx.fillText(nameDisplay, textX, Math.round(bH * 0.38));
+
+        // Line 3: date
+        bCtx.fillStyle = '#94a3b8';
+        bCtx.font = `${Math.round(bH * 0.17)}px "Segoe UI", sans-serif`;
+        bCtx.fillText(dateStr, textX, Math.round(bH * 0.73));
+
+        overlay.appendChild(badgeCanvas);
+
+        // Resize handle
+        const handle = document.createElement('div');
+        Object.assign(handle.style, {
+            position: 'absolute',
+            bottom: '-7px',
+            right: '-7px',
+            width: '14px',
+            height: '14px',
+            borderRadius: '50%',
+            background: '#22d3ee',
+            border: '2px solid white',
+            cursor: 'nwse-resize',
+            pointerEvents: 'auto',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+        });
+        handle.dataset.digitalSigResize = '1';
+        overlay.appendChild(handle);
+
+        overlay.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (event.target instanceof HTMLElement && event.target.dataset.digitalSigResize === '1') {
+                window._digitalSigInteraction = {
+                    mode: 'resize',
+                    pointerX: event.clientX,
+                    startWidth: width,
+                    startX: x,
+                    startY: y,
+                    width,
+                    height,
+                };
+                return;
+            }
+
+            window._digitalSigInteraction = {
+                mode: 'move',
+                pointerX: event.clientX,
+                pointerY: event.clientY,
+                startX: x,
+                startY: y,
+                width,
+                height,
+            };
+        });
+
+        signaturesLayer.appendChild(overlay);
     };
 
-    let digitalSignPreviewDataUrl = null;
+    // Register so renderSignaturesLayer can call it via digitalSigOverlayRenderer
+    digitalSigOverlayRenderer = renderDigitalSigOverlay;
 
-    const drawEmptyDigitalPreview = () => {
-        if (!digitalSignPreviewCanvas) {
-            return;
+    enableDigitalSignCheckbox?.addEventListener('change', () => {
+        const checked = enableDigitalSignCheckbox.checked;
+        digitalSignFieldsDiv?.classList.toggle('hidden', !checked);
+
+        if (checked) {
+            window._digitalSig = {
+                pageNumber: currentPage,
+                xRatio: 0.25,
+                yRatio: 0.80,
+                widthRatio: 0.5,
+            };
+            syncDigitalSigPositionFields();
+        } else {
+            window._digitalSig = null;
+            syncDigitalSigPositionFields();
+            signaturesLayer.querySelector('[data-digital-sig]')?.remove();
         }
-
-        digitalSignPreviewCanvas.width = 500;
-        digitalSignPreviewCanvas.height = 200;
-        const ctx = digitalSignPreviewCanvas.getContext('2d');
-        ctx.fillStyle = '#0f172a';
-        ctx.fillRect(0, 0, 500, 200);
-        ctx.fillStyle = '#475569';
-        ctx.font = '14px "Segoe UI", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Entrez votre nom pour voir l\u2019aper\u00e7u', 250, 100);
-        digitalSignPreviewDataUrl = null;
-    };
-
-    const updateDigitalSignPreview = async () => {
-        if (!digitalSignPreviewCanvas) {
-            return;
-        }
-
-        const name = (digitalSignNameInput?.value || '').trim();
-        if (!name) {
-            drawEmptyDigitalPreview();
-            return;
-        }
-
-        const dataUrl = await buildDigitalSignatureCanvas(name);
-        digitalSignPreviewDataUrl = dataUrl;
-
-        const img = new Image();
-        img.onload = () => {
-            digitalSignPreviewCanvas.width = img.naturalWidth;
-            digitalSignPreviewCanvas.height = img.naturalHeight;
-            const ctx = digitalSignPreviewCanvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-        };
-        img.src = dataUrl;
-    };
-
-    const closeDigitalModal = () => {
-        digitalSignModal?.classList.add('hidden');
-        digitalSignModal?.classList.remove('flex');
-    };
-
-    const openDigitalModal = () => {
-        if (!digitalSignModal) {
-            return;
-        }
-
-        digitalSignModal.classList.remove('hidden');
-        digitalSignModal.classList.add('flex');
-        drawEmptyDigitalPreview();
-        digitalSignNameInput?.focus();
-    };
-
-    openDigitalSignBtn?.addEventListener('click', openDigitalModal);
-    cancelDigitalSignBtn?.addEventListener('click', closeDigitalModal);
-    closeDigitalSignModalBtn?.addEventListener('click', closeDigitalModal);
-
-    digitalSignModal?.addEventListener('click', (event) => {
-        if (event.target === digitalSignModal) {
-            closeDigitalModal();
-        }
-    });
-
-    document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && digitalSignModal && !digitalSignModal.classList.contains('hidden')) {
-            closeDigitalModal();
-        }
-    });
-
-    digitalSignNameInput?.addEventListener('input', () => {
-        updateDigitalSignPreview();
-    });
-
-    confirmDigitalSignBtn?.addEventListener('click', async () => {
-        const name = (digitalSignNameInput?.value || '').trim();
-        if (!name) {
-            digitalSignNameInput?.focus();
-            return;
-        }
-
-        const dataUrl = digitalSignPreviewDataUrl ?? (await buildDigitalSignatureCanvas(name));
-        const aspectRatio = await getImageAspectRatio(dataUrl);
-
-        const signature = {
-            id: `sig-${signatureCounter}`,
-            pageNumber: totalPages,
-            xRatio: 0.52,
-            yRatio: 0.78,
-            widthRatio: 0.42,
-            aspectRatio,
-            signatureData: dataUrl,
-        };
-
-        signatureCounter += 1;
-        signatures.push(signature);
-        selectedSignatureId = signature.id;
 
         renderSignaturesLayer();
-        renderSignaturesList();
-        closeDigitalModal();
-
-        syncSignaturesField();
-        const submitButton = signForm.querySelector('button[type="submit"]');
-        if (submitButton) {
-            submitButton.disabled = true;
-            submitButton.classList.add('opacity-70', 'cursor-not-allowed');
-        }
-        signForm.submit();
     });
+
+    // Live-update: redraw the overlay when the user types their name
+    digitalSignNameInlineInput?.addEventListener('input', () => {
+        if (window._digitalSig) {
+            renderDigitalSigOverlay();
+        }
+    });
+
+    // When navigating pages, overlay must appear/disappear
+    // (renderSignaturesLayer already calls digitalSigOverlayRenderer via the hook above)
 
     setMode('draw');
     renderSignaturesList();
     loadPdf();
 })();
+
