@@ -30,7 +30,13 @@ final class PdfSignController extends AbstractController
     ) {}
 
     #[Route('/', name: 'app_pdf_sign_index', methods: ['GET'])]
-    public function index(SessionInterface $session): Response
+    public function index(): Response
+    {
+        return $this->render('landing/index.html.twig');
+    }
+
+    #[Route('/signer', name: 'app_pdf_sign_editor', methods: ['GET'])]
+    public function editor(SessionInterface $session): Response
     {
         /** @var array{path: string, originalName: string}|null $uploadedPdf */
         $uploadedPdf = $session->get(self::SESSION_KEY);
@@ -49,20 +55,20 @@ final class PdfSignController extends AbstractController
         if (!$uploadedFile instanceof UploadedFile) {
             $this->addFlash('error', 'Merci de choisir un fichier PDF.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         if ($uploadedFile->getSize() !== null && $uploadedFile->getSize() > self::MAX_UPLOAD_BYTES) {
             $this->addFlash('error', 'Le fichier depasse la taille maximale de 15 Mo.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         $mimeType = $uploadedFile->getMimeType();
         if ($mimeType !== 'application/pdf' && strtolower((string) $uploadedFile->guessExtension()) !== 'pdf') {
             $this->addFlash('error', 'Seuls les fichiers PDF sont acceptes.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         $existing = $session->get(self::SESSION_KEY);
@@ -80,7 +86,7 @@ final class PdfSignController extends AbstractController
         } catch (FileException) {
             $this->addFlash('error', 'Impossible denregistrer le fichier.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         $session->set(self::SESSION_KEY, [
@@ -90,7 +96,7 @@ final class PdfSignController extends AbstractController
 
         $this->addFlash('success', 'PDF importe. Tu peux maintenant le signer.');
 
-        return $this->redirectToRoute('app_pdf_sign_index');
+        return $this->redirectToRoute('app_pdf_sign_editor');
     }
 
     #[Route('/preview', name: 'app_pdf_sign_preview', methods: ['GET'])]
@@ -117,7 +123,7 @@ final class PdfSignController extends AbstractController
         if (!is_array($uploadedPdf) || !isset($uploadedPdf['path']) || !is_string($uploadedPdf['path']) || !is_file($uploadedPdf['path'])) {
             $this->addFlash('error', 'Importe un PDF avant de le signer.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         $signaturesData = (string) $request->request->get('signaturesData', '');
@@ -128,7 +134,7 @@ final class PdfSignController extends AbstractController
         if ($signaturesData === '' && $signerName === null) {
             $this->addFlash('error', 'Ajoute au moins une signature avant de continuer.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         $digitalPosition = null;
@@ -156,7 +162,7 @@ final class PdfSignController extends AbstractController
             if (!is_array($decodedSignatures)) {
                 $this->addFlash('error', 'Ajoute au moins une signature avant de continuer.');
 
-                return $this->redirectToRoute('app_pdf_sign_index');
+                return $this->redirectToRoute('app_pdf_sign_editor');
             }
 
             /** @var array<int, array<string, mixed>> $decodedSignatures */
@@ -164,7 +170,7 @@ final class PdfSignController extends AbstractController
         } catch (\Throwable) {
             $this->addFlash('error', 'Impossible de signer ce PDF. Verifie la signature et reessaie.');
 
-            return $this->redirectToRoute('app_pdf_sign_index');
+            return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
         $downloadName = sprintf(
@@ -175,6 +181,9 @@ final class PdfSignController extends AbstractController
         $response = new BinaryFileResponse($signedPath);
         $response->setContentDisposition(ResponseHeaderBag::DISPOSITION_ATTACHMENT, $downloadName);
         $response->deleteFileAfterSend(true);
+
+        $this->filesystem->remove($uploadedPdf['path']);
+        $session->remove(self::SESSION_KEY);
 
         return $response;
     }
@@ -191,6 +200,6 @@ final class PdfSignController extends AbstractController
         $session->remove(self::SESSION_KEY);
         $this->addFlash('success', 'Le document courant a ete retire.');
 
-        return $this->redirectToRoute('app_pdf_sign_index');
+        return $this->redirectToRoute('app_pdf_sign_editor');
     }
 }

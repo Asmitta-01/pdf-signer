@@ -1,0 +1,120 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}PDF Signer | Signez vos PDF simplement et gratuitement{% endblock %}
+
+{% block stylesheets %}
+    <style>
+        .landing-glow {
+            background:
+                radial-gradient(
+                    ellipse at 72% 28%,
+                    rgba(34, 211, 238, 0.16),
+                    transparent 36%
+                ),
+                radial-gradient(
+                    ellipse at 8% 8%,
+                    rgba(14, 165, 233, 0.13),
+                    transparent 30%
+                );
+        }
+        .grid-paper {
+            background-image:
+                linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+            background-size: 28px 28px;
+        }
+        .float-card {
+            animation: float-card 7s ease-in-out infinite;
+        }
+        @keyframes float-card {
+            0%,
+            100% {
+                transform: translateY(0) rotate(-1deg);
+            }
+            50% {
+                transform: translateY(-9px) rotate(0deg);
+            }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .float-card {
+                animation: none;
+            }
+        }
+    </style>
+{% endblock %}
+
+{% block body %}
+    <div class="landing-glow min-h-screen overflow-hidden">
+        <header class="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 sm:px-8">
+            <a href="{{ path('app_pdf_sign_index') }}" class="flex items-center gap-3" aria-label="PDF Signer, accueil">
+                <span class="grid h-10 w-10 place-items-center rounded-xl bg-cyan-300 text-slate-950 shadow-lg shadow-cyan-300/20"><svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M7 3.75h7l5 5v11.5H7a2 2 0 0 1-2-2v-12a2.5 2.5 0 0 1 2-2.5Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M14 4v5h5M8.5 15.5c2.5-3 3.2 2.3 5.8-1.2 1.2-1.6 2-.9 2.7-.3"/></svg></span>
+                <span class="text-lg font-bold tracking-tight text-white">pdf<span class="text-cyan-300">signer</span></span>
+            </a>
+            <nav class="hidden items-center gap-8 text-sm text-slate-300 md:flex" aria-label="Navigation principale"><a class="transition hover:text-white" href="#comment-ca-marche">Comment ça marche</a><a class="transition hover:text-white" href="#confidentialite">Confidentialité</a><a class="transition hover:text-white" href="#questions">Questions</a></nav>
+            <a href="{{ path('app_pdf_sign_editor') }}" class="rounded-xl border border-slate-700 bg-slate-900/80 px-4 py-2.5 text-sm font-semibold text-white transition hover:border-cyan-300/60 hover:bg-slate-800">Ouvrir l’outil <span aria-hidden="true">↗</span></a>
+        </header>
+
+        <main>
+            <section class="mx-auto grid max-w-7xl items-center gap-14 px-5 pb-24 pt-12 sm:px-8 sm:pt-20 lg:grid-cols-[1.02fr_.98fr] lg:pb-32">
+                <div class="relative z-10">
+                    <div class="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/[0.08] px-3.5 py-2 text-xs font-semibold tracking-wide text-cyan-100"><span class="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,.8)]"></span> GRATUIT · SANS COMPTE · DIRECTEMENT EN LIGNE</div>
+                    <h1 class="mt-7 max-w-2xl text-5xl font-bold leading-[1.07] tracking-[-0.055em] text-white sm:text-6xl lg:text-[4.35rem]">Votre signature.<br><span class="text-cyan-300">Votre document.</span><br>En quelques instants.</h1>
+                    <p class="mt-6 max-w-xl text-base leading-8 text-slate-300 sm:text-lg">Ajoutez une ou plusieurs signatures à un PDF, placez-les précisément et récupérez votre document. Simple, gratuit et pensé pour rester privé.</p>
+                    <div class="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center"><a href="{{ path('app_pdf_sign_editor') }}" class="group inline-flex items-center justify-center gap-3 rounded-xl bg-cyan-300 px-6 py-4 font-bold text-slate-950 shadow-xl shadow-cyan-950/30 transition hover:-translate-y-0.5 hover:bg-cyan-200">Signer un PDF gratuitement<svg class="h-4 w-4 transition group-hover:translate-x-1" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h13m-5-5 5 5-5 5"/></svg></a><span class="text-center text-xs text-slate-500 sm:text-left">PDF jusqu’à 15 Mo · aucun compte requis</span></div>
+                    <div class="mt-10 flex flex-wrap gap-x-6 gap-y-3 text-sm text-slate-300"><span>✓ Dessin, image ou texte</span><span>✓ Placement libre en direct</span><span>✓ Gratuit, sans inscription</span></div>
+                </div>
+
+                <div class="relative mx-auto w-full max-w-[570px] lg:ml-auto">
+                    <div class="absolute -inset-8 rounded-[3rem] bg-cyan-400/[0.08] blur-3xl"></div>
+                    <div class="grid-paper relative rounded-[2rem] border border-slate-700/80 bg-slate-900/70 p-4 shadow-2xl shadow-black/40 backdrop-blur sm:p-6">
+                        <div class="mb-4 flex items-center justify-between"><div class="flex gap-1.5"><i class="h-2.5 w-2.5 rounded-full bg-rose-400/80"></i><i class="h-2.5 w-2.5 rounded-full bg-amber-300/80"></i><i class="h-2.5 w-2.5 rounded-full bg-emerald-300/80"></i></div><div class="rounded-full border border-slate-700 bg-slate-950/80 px-3 py-1 text-[10px] text-slate-400">contrat.pdf · aperçu</div><span class="text-xs text-slate-500">1 / 3</span></div>
+                        <div class="relative mx-auto min-h-[340px] max-w-[390px] overflow-hidden rounded-lg bg-[#fffefa] p-7 text-slate-800 shadow-xl sm:min-h-[405px] sm:p-10">
+                            <div class="mx-auto h-2 w-20 rounded-full bg-cyan-200"></div><p class="mt-7 text-center text-[10px] font-bold tracking-[.24em] text-slate-500">ACCORD DE PRESTATION</p>
+                            <div class="mt-7 space-y-2.5"><div class="h-2 w-full rounded bg-slate-200"></div><div class="h-2 w-[93%] rounded bg-slate-200"></div><div class="h-2 w-[97%] rounded bg-slate-200"></div><div class="h-2 w-[71%] rounded bg-slate-200"></div></div>
+                            <div class="mt-6 space-y-2.5"><div class="h-2 w-full rounded bg-slate-100"></div><div class="h-2 w-[95%] rounded bg-slate-100"></div><div class="h-2 w-[84%] rounded bg-slate-100"></div></div>
+                            <div class="mt-9 grid grid-cols-2 gap-7"><div><div class="h-px bg-slate-300"></div><p class="mt-2 text-[9px] text-slate-400">Le client</p></div><div class="relative"><div class="absolute -top-8 left-1 -rotate-6 text-[26px] text-blue-700" style="font-family:'Dancing Script',cursive">Camille R.</div><div class="h-px bg-slate-300"></div><p class="mt-2 text-[9px] text-slate-400">Le prestataire</p><div class="absolute -inset-x-3 -inset-y-5 rounded-md border-2 border-cyan-500/70"></div><span class="absolute -bottom-7 -right-2 h-3 w-3 rounded-full border-2 border-white bg-cyan-500 shadow"></span></div></div>
+                            <div class="absolute bottom-4 right-4 rounded-full bg-emerald-50 px-2.5 py-1 text-[9px] font-semibold text-emerald-700">Signature placée</div>
+                        </div>
+                        <div class="float-card absolute -left-3 top-[38%] rounded-2xl border border-slate-700 bg-slate-950/95 p-3 shadow-2xl sm:-left-8"><div class="flex items-center gap-2"><span class="grid h-8 w-8 place-items-center rounded-lg bg-cyan-300/10 text-cyan-300">✎</span><span><span class="block text-xs font-semibold text-white">Signature libre</span><span class="block text-[10px] text-slate-400">Glissez, ajustez, terminé</span></span></div></div>
+                        <div class="absolute -right-2 bottom-8 rounded-xl border border-emerald-300/20 bg-slate-950/95 px-3 py-2 shadow-xl sm:-right-6"><span class="flex items-center gap-2 text-xs font-semibold text-emerald-200"><span class="grid h-5 w-5 place-items-center rounded-full bg-emerald-300/15">✓</span> Prêt à télécharger</span></div>
+                    </div>
+                    <p class="mt-4 text-center text-xs text-slate-500">Aperçu illustratif de l’éditeur PDF Signer</p>
+                </div>
+            </section>
+
+            <section id="comment-ca-marche" class="border-y border-slate-800/80 bg-slate-900/45">
+                <div class="mx-auto max-w-7xl px-5 py-20 sm:px-8 lg:py-24">
+                    <div class="max-w-2xl"><p class="text-xs font-bold uppercase tracking-[.25em] text-cyan-300">En trois étapes</p><h2 class="mt-4 text-3xl font-bold tracking-tight text-white sm:text-4xl">Du PDF à la signature, sans détour.</h2><p class="mt-4 leading-7 text-slate-400">Tout se passe dans le navigateur et l’éditeur. Pas de compte à créer ni de formule à choisir.</p></div>
+                    <div class="mt-12 grid gap-4 md:grid-cols-3">
+                        <article class="rounded-2xl border border-slate-800 bg-slate-950/70 p-6"><span class="text-sm font-bold text-cyan-300">01 / IMPORTER</span><h3 class="mt-5 text-lg font-semibold text-white">Choisissez votre PDF</h3><p class="mt-2 text-sm leading-6 text-slate-400">Importez un fichier de 15 Mo maximum et parcourez ses pages dans l’aperçu.</p>
+                        </article>
+                        <article class="rounded-2xl border border-slate-800 bg-slate-950/70 p-6"><span class="text-sm font-bold text-cyan-300">02 / SIGNER</span><h3 class="mt-5 text-lg font-semibold text-white">Créez et placez vos signatures</h3><p class="mt-2 text-sm leading-6 text-slate-400">Dessinez, importez une image ou saisissez un nom avec une police manuscrite. Ajoutez-en plusieurs, puis déplacez et redimensionnez chacune.</p></article><article class="rounded-2xl border border-slate-800 bg-slate-950/70 p-6"><span class="text-sm font-bold text-cyan-300">03 / TÉLÉCHARGER</span><h3 class="mt-5 text-lg font-semibold text-white">Récupérez votre document</h3><p class="mt-2 text-sm leading-6 text-slate-400">Générez le PDF signé et téléchargez-le. Le fichier temporaire de travail est supprimé à la fin.</p>
+                        </article>
+                    </div>
+                </div>
+            </section>
+
+            <section id="confidentialite" class="mx-auto grid max-w-7xl gap-12 px-5 py-20 sm:px-8 lg:grid-cols-[.8fr_1.2fr] lg:py-28">
+                <div><p class="text-xs font-bold uppercase tracking-[.25em] text-emerald-300">Vos documents restent à vous</p><h2 class="mt-4 text-3xl font-bold tracking-tight text-white sm:text-4xl">La confidentialité fait partie du parcours.</h2><p class="mt-5 leading-7 text-slate-400">PDF Signer est gratuit et ne demande aucune inscription. Les documents ne sont pas conservés dans une bibliothèque de compte.</p></div>
+                <div class="grid gap-3 sm:grid-cols-2"><article class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><span class="text-xl text-cyan-300">↗</span><h3 class="mt-4 font-semibold text-white">Traitement temporaire</h3><p class="mt-2 text-sm leading-6 text-slate-400">Le fichier est temporairement transmis au serveur pour afficher les pages et produire le PDF final. Il est associé à votre session de travail.</p></article><article class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><span class="text-xl text-emerald-300">⌫</span><h3 class="mt-4 font-semibold text-white">Nettoyage en fin de parcours</h3><p class="mt-2 text-sm leading-6 text-slate-400">Après la génération du PDF signé, le PDF source est retiré du stockage temporaire. Vous pouvez aussi abandonner et supprimer le document depuis l’éditeur.</p></article><article class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><span class="text-xl text-cyan-300">◎</span><h3 class="mt-4 font-semibold text-white">Aucun compte à alimenter</h3><p class="mt-2 text-sm leading-6 text-slate-400">Pas d’espace personnel ni d’historique de documents associé à votre identité.</p></article><article class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"><span class="text-xl text-amber-300">i</span><h3 class="mt-4 font-semibold text-white">Une précision utile</h3><p class="mt-2 text-sm leading-6 text-slate-400">La signature dessinée ou typographique est une signature visuelle. Elle ne remplace pas une identité numérique certifiée.</p></article></div>
+            </section>
+
+            <section class="px-5 pb-20 sm:px-8 lg:pb-28"><div class="mx-auto flex max-w-7xl flex-col items-start justify-between gap-8 overflow-hidden rounded-[2rem] border border-cyan-200/15 bg-gradient-to-br from-cyan-300/10 via-slate-900 to-slate-900 p-8 sm:p-12 lg:flex-row lg:items-center"><div><p class="text-xs font-bold uppercase tracking-[.25em] text-cyan-300">Prêt quand vous l’êtes</p><h2 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">Votre prochain PDF est à un clic.</h2><p class="mt-3 max-w-xl text-slate-400">L’outil est gratuit, accessible sans compte et prêt à utiliser.</p></div><a href="{{ path('app_pdf_sign_editor') }}" class="inline-flex shrink-0 items-center gap-3 rounded-xl bg-cyan-300 px-6 py-4 font-bold text-slate-950 transition hover:bg-cyan-200">Commencer gratuitement <span aria-hidden="true">→</span></a></div></section>
+
+            <section id="questions" class="mx-auto max-w-4xl px-5 pb-20 sm:px-8">
+                <p class="text-xs font-bold uppercase tracking-[.25em] text-cyan-300">Questions fréquentes</p>
+                <h2 class="mt-3 text-3xl font-bold tracking-tight text-white">Quelques réponses avant de commencer.</h2>
+                <div class="mt-8 divide-y divide-slate-800 border-y border-slate-800">
+                    <details class="group py-5"><summary class="flex cursor-pointer list-none items-center justify-between font-semibold text-slate-100">Est-ce vraiment gratuit ?<span class="text-cyan-300 transition group-open:rotate-45">+</span></summary><p class="mt-3 max-w-3xl text-sm leading-6 text-slate-400">Oui. La plateforme est accessible gratuitement, sans création de compte ni abonnement.</p></details>
+                    <details class="group py-5"><summary class="flex cursor-pointer list-none items-center justify-between font-semibold text-slate-100">Puis-je ajouter plusieurs signatures ?<span class="text-cyan-300 transition group-open:rotate-45">+</span></summary><p class="mt-3 max-w-3xl text-sm leading-6 text-slate-400">Oui. Vous pouvez placer plusieurs signatures sur différentes pages, puis les déplacer, les redimensionner ou les supprimer avant de générer le document.</p></details>
+                    <details class="group py-5"><summary class="flex cursor-pointer list-none items-center justify-between font-semibold text-slate-100">Mes fichiers sont-ils enregistrés ?<span class="text-cyan-300 transition group-open:rotate-45">+</span></summary><p class="mt-3 max-w-3xl text-sm leading-6 text-slate-400">Aucun compte ou historique n’est créé. Le PDF est traité temporairement côté serveur pour le fonctionnement de l’outil, puis le fichier de travail est supprimé après génération. Téléchargez votre résultat pour le conserver.</p></details>
+                    <details class="group py-5"><summary class="flex cursor-pointer list-none items-center justify-between font-semibold text-slate-100">La signature est-elle certifiée ?<span class="text-cyan-300 transition group-open:rotate-45">+</span></summary><p class="mt-3 max-w-3xl text-sm leading-6 text-slate-400">L’éditeur peut ajouter une signature PDF avec un certificat auto-signé. Elle permet de détecter les modifications apportées au PDF après signature et affiche le nom saisi, mais elle ne vérifie pas à elle seule l’identité du signataire et n’est pas une signature qualifiée.</p></details>
+                </div>
+            </section>
+        </main>
+        <footer class="border-t border-slate-800">
+            <div class="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-7 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8"><span>© {{ "now"|date("Y") }} PDF Signer · Simplement signer, puis repartir avec son fichier.</span><a class="font-medium text-slate-400 transition hover:text-cyan-300" href="{{ path('app_pdf_sign_editor') }}">Ouvrir l’outil <span aria-hidden="true">↗</span></a>
+            </div>
+        </footer>
+    </div>
+{% endblock %}
