@@ -1,5 +1,9 @@
 # PDF Signer (Symfony + Tailwind)
 
+## Aperçu
+
+![Landing Page](./screenshot/screenshot-landing.png)
+
 Application web Symfony pour signer des PDF avec une experience visuelle complete:
 
 - landing page publique avec présentation de l'outil
