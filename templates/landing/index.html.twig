@@ -113,7 +113,10 @@
             </section>
         </main>
         <footer class="border-t border-slate-800">
-            <div class="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-7 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8"><span>© {{ "now"|date("Y") }} PDF Signer · Simplement signer, puis repartir avec son fichier.</span><a class="font-medium text-slate-400 transition hover:text-cyan-300" href="{{ path('app_pdf_sign_editor') }}">Ouvrir l’outil <span aria-hidden="true">↗</span></a>
+            <div class="mx-auto flex max-w-7xl flex-col gap-3 px-5 py-7 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+                <span>© {{ "now"|date("Y") }} PDF Signer · Simplement signer, puis repartir avec son fichier.</span>
+                <span>Développé par <a class="font-semibold text-slate-300 underline decoration-cyan-400/50 underline-offset-4 transition hover:text-cyan-200 ms-1" href="https://brayantiwa.me" target="_blank" rel="noopener noreferrer">Brayan Tiwa <span aria-hidden="true">↗</span></a></span>
+                <a class="font-medium text-slate-400 transition hover:text-cyan-300" href="{{ path('app_pdf_sign_editor') }}">Ouvrir l’outil <span aria-hidden="true">↗</span></a>
             </div>
         </footer>
     </div>
