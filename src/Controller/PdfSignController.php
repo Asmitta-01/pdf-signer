@@ -137,6 +137,10 @@ final class PdfSignController extends AbstractController
             return $this->redirectToRoute('app_pdf_sign_editor');
         }
 
+        $engine = $request->request->get('signEngine') === PdfSigner::ENGINE_CLASSIC
+            ? PdfSigner::ENGINE_CLASSIC
+            : PdfSigner::ENGINE_PYHANKO;
+
         $digitalPosition = null;
         if ($signerName !== null) {
             $rawPage = $request->request->get('digitalSignPage', '');
@@ -166,7 +170,7 @@ final class PdfSignController extends AbstractController
             }
 
             /** @var array<int, array<string, mixed>> $decodedSignatures */
-            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $decodedSignatures, $signerName, $digitalPosition);
+            $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $decodedSignatures, $signerName, $digitalPosition, $engine);
         } catch (\Throwable) {
             $this->addFlash('error', 'Impossible de signer ce PDF. Verifie la signature et reessaie.');
 

@@ -11,32 +11,61 @@ use Symfony\Component\Filesystem\Filesystem;
 
 final class PdfSigner
 {
+    public const ENGINE_PYHANKO = 'pyhanko';
+    public const ENGINE_CLASSIC = 'classic';
+
     private const PAGE_MARGIN = 12.0;
 
     public function __construct(
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly Filesystem $filesystem,
+        private readonly PyHankoSigner $pyHankoSigner,
+        private readonly SelfSignedCertificateGenerator $certificateGenerator,
     ) {}
 
     /**
      * @param array<int, array<string, mixed>> $signatures
      * @param array{page: int, xRatio: float, yRatio: float, widthRatio: float}|null $digitalPosition
      */
-    public function sign(string $sourcePdfPath, array $signatures, ?string $signerName = null, ?array $digitalPosition = null): string
+    public function sign(string $sourcePdfPath, array $signatures, ?string $signerName = null, ?array $digitalPosition = null, string $engine = self::ENGINE_PYHANKO): string
     {
         $signedDirectory = $this->projectDir . '/var/storage/signed';
         $this->filesystem->mkdir($signedDirectory);
 
         $outputPath = sprintf('%s/%s.pdf', $signedDirectory, bin2hex(random_bytes(16)));
 
-        if ($signerName !== null) {
+        if ($engine === self::ENGINE_PYHANKO) {
+            $this->signWithPyHanko($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+        } elseif ($signerName !== null) {
             $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
         } else {
             $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
         }
 
         return $outputPath;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $signatures
+     * @param array{page: int, xRatio: float, yRatio: float, widthRatio: float}|null $digitalPosition
+     */
+    private function signWithPyHanko(string $sourcePdfPath, array $signatures, ?string $signerName, string $outputPath, ?array $digitalPosition): void
+    {
+        $pageCount = (new Fpdi())->setSourceFile($sourcePdfPath);
+
+        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+        if ($normalizedSignatures === [] && ($signerName === null || $signatures !== [])) {
+            throw new \InvalidArgumentException('Aucune signature valide a appliquer.');
+        }
+
+        try {
+            $this->pyHankoSigner->sign($sourcePdfPath, $outputPath, $normalizedSignatures, $signerName, $digitalPosition, $pageCount);
+        } finally {
+            if ($tempSignaturePaths !== []) {
+                $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
+            }
+        }
     }
 
     private function signWithFpdi(string $sourcePdfPath, array $signatures, string $outputPath): void
@@ -131,7 +160,7 @@ final class PdfSigner
                 }
             }
 
-            [$certPem, $privateKeyPem] = $this->generateSelfSignedCert($signerName);
+            [$certPem, $privateKeyPem] = $this->certificateGenerator->generate($signerName);
 
             $pdf->setSignature($certPem, $privateKeyPem, '', '', 2, [
                 'Name' => $signerName,
@@ -303,44 +332,6 @@ final class PdfSigner
         ];
 
         return strtr($text, $map);
-    }
-
-    /**
-     * @return array{0: string, 1: string}
-     */
-    private function generateSelfSignedCert(string $signerName): array
-    {
-        $config = [
-            'digest_alg' => 'sha256',
-            'private_key_bits' => 2048,
-            'private_key_type' => \OPENSSL_KEYTYPE_RSA,
-        ];
-
-        $dn = [
-            'countryName' => 'FR',
-            'organizationName' => 'PDF Signer',
-            'commonName' => mb_substr($signerName, 0, 64),
-        ];
-
-        $privateKey = openssl_pkey_new($config);
-        if ($privateKey === false) {
-            throw new \RuntimeException('Impossible de générer la clé privée.');
-        }
-
-        $csr = openssl_csr_new($dn, $privateKey, $config);
-        if ($csr === false) {
-            throw new \RuntimeException('Impossible de créer la CSR.');
-        }
-
-        $cert = openssl_csr_sign($csr, null, $privateKey, 365, $config);
-        if ($cert === false) {
-            throw new \RuntimeException('Impossible de signer le certificat auto-signé.');
-        }
-
-        openssl_x509_export($cert, $certPem);
-        openssl_pkey_export($privateKey, $privateKeyPem);
-
-        return [$certPem, $privateKeyPem];
     }
 
     /**
