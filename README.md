@@ -2,6 +2,8 @@
 
 ## Aperçu
 
+[![CI and Deploy](https://github.com/Asmitta-01/pdf-signer/actions/workflows/ci-deploy.yml/badge.svg)](https://github.com/Asmitta-01/pdf-signer/actions/workflows/ci-deploy.yml)
+
 ![Landing Page](./screenshot/screenshot-landing.png)
 
 Application web Symfony pour signer des PDF avec une experience visuelle complete:
