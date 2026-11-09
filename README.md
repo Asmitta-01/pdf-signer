@@ -126,7 +126,7 @@ La page d'accueil présente la plateforme. Cliquez sur **Signer un PDF gratuitem
 Variables d'environnement (`.env.local`) :
 
 | Variable | Rôle |
-|---|---|
+| --- | --- |
 | `PDF_SIGN_PYTHON` | Interpréteur Python où pyHanko est installé |
 | `PDF_SIGN_P12_PATH` / `PDF_SIGN_P12_PASSWORD` | Certificat PKCS#12 à utiliser. Vide = certificat auto-signé généré à chaque signature |
 | `PDF_SIGN_TSA_URL` | Autorité d'horodatage RFC 3161 (optionnel, niveau PAdES B-T) |

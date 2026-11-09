@@ -38,7 +38,7 @@ final class PyHankoSigner
         $job = [
             'input' => $sourcePdfPath,
             'output' => $outputPath,
-            'stamps' => array_map(static fn (array $stamp): array => [
+            'stamps' => array_map(static fn(array $stamp): array => [
                 'page' => $stamp['pageNumber'],
                 'xRatio' => $stamp['xRatio'],
                 'yRatio' => $stamp['yRatio'],
