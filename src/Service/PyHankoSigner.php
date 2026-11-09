@@ -76,8 +76,13 @@ final class PyHankoSigner
                 ];
             }
 
+            $pythonBinary = $this->pythonBinary;
+            if ($pythonBinary === 'python3' && \PHP_OS_FAMILY === 'Windows') {
+                $pythonBinary = 'python';
+            }
+
             $process = new Process(
-                [$this->pythonBinary, $this->projectDir . '/bin/pyhanko_sign.py'],
+                [$pythonBinary, $this->projectDir . '/bin/pyhanko_sign.py'],
                 null,
                 null,
                 json_encode($job, JSON_THROW_ON_ERROR),

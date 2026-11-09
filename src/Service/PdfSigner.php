@@ -45,7 +45,20 @@ final class PdfSigner
 
         try {
             if ($engine === self::ENGINE_PYHANKO) {
-                $this->signWithPyHanko($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+                try {
+                    $this->signWithPyHanko($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+                } catch (\RuntimeException $e) {
+                    if (str_contains($e->getMessage(), 'pyHanko a échoué')) {
+                        // Fallback automatically to classic engine if Python / pyHanko fails
+                        if ($signerName !== null) {
+                            $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+                        } else {
+                            $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
+                        }
+                    } else {
+                        throw $e;
+                    }
+                }
             } elseif ($signerName !== null) {
                 $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
             } else {

@@ -171,8 +171,8 @@ final class PdfSignController extends AbstractController
 
             /** @var array<int, array<string, mixed>> $decodedSignatures */
             $signedPath = $this->pdfSigner->sign($uploadedPdf['path'], $decodedSignatures, $signerName, $digitalPosition, $engine);
-        } catch (\Throwable) {
-            $this->addFlash('error', 'Impossible de signer ce PDF. Verifie la signature et reessaie.');
+        } catch (\Throwable $e) {
+            $this->addFlash('error', sprintf('Impossible de signer ce PDF : %s', $e->getMessage()));
 
             return $this->redirectToRoute('app_pdf_sign_editor');
         }
