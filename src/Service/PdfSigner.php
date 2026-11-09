@@ -5,70 +5,158 @@ declare(strict_types=1);
 namespace App\Service;
 
 use setasign\Fpdi\Fpdi;
-use setasign\Fpdi\TcpdfFpdi;
+use setasign\Fpdi\Tcpdf\Fpdi as TcpdfFpdi;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Filesystem\Filesystem;
 
 final class PdfSigner
 {
+    public const ENGINE_PYHANKO = 'pyhanko';
+    public const ENGINE_CLASSIC = 'classic';
+
     private const PAGE_MARGIN = 12.0;
 
     public function __construct(
         #[Autowire('%kernel.project_dir%')]
         private readonly string $projectDir,
         private readonly Filesystem $filesystem,
+        private readonly PyHankoSigner $pyHankoSigner,
+        private readonly SelfSignedCertificateGenerator $certificateGenerator,
     ) {}
 
     /**
      * @param array<int, array<string, mixed>> $signatures
      * @param array{page: int, xRatio: float, yRatio: float, widthRatio: float}|null $digitalPosition
      */
-    public function sign(string $sourcePdfPath, array $signatures, ?string $signerName = null, ?array $digitalPosition = null): string
+    public function sign(string $sourcePdfPath, array $signatures, ?string $signerName = null, ?array $digitalPosition = null, string $engine = self::ENGINE_PYHANKO): string
     {
+        if (!is_file($sourcePdfPath) || !is_readable($sourcePdfPath)) {
+            throw new \InvalidArgumentException(sprintf('Le fichier PDF source "%s" est introuvable ou illisible.', $sourcePdfPath));
+        }
+
+        if (!in_array($engine, [self::ENGINE_PYHANKO, self::ENGINE_CLASSIC], true)) {
+            throw new \InvalidArgumentException(sprintf('Moteur de signature inconnu : "%s".', $engine));
+        }
+
         $signedDirectory = $this->projectDir . '/var/storage/signed';
         $this->filesystem->mkdir($signedDirectory);
 
         $outputPath = sprintf('%s/%s.pdf', $signedDirectory, bin2hex(random_bytes(16)));
 
-        if ($signerName !== null) {
-            $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
-        } else {
-            $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
+        try {
+            if ($engine === self::ENGINE_PYHANKO) {
+                try {
+                    $this->signWithPyHanko($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+                } catch (\RuntimeException $e) {
+                    if (str_contains($e->getMessage(), 'pyHanko a échoué')) {
+                        // Fallback automatically to classic engine if Python / pyHanko fails
+                        if ($signerName !== null) {
+                            $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+                        } else {
+                            $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
+                        }
+                    } else {
+                        throw $e;
+                    }
+                }
+            } elseif ($signerName !== null) {
+                $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+            } else {
+                $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
+            }
+        } catch (\Throwable $e) {
+            if (is_file($outputPath)) {
+                $this->filesystem->remove($outputPath);
+            }
+
+            throw $e;
+        }
+
+        if (!is_file($outputPath) || filesize($outputPath) === 0) {
+            if (is_file($outputPath)) {
+                $this->filesystem->remove($outputPath);
+            }
+
+            throw new \RuntimeException('La signature du PDF a échoué : aucun fichier valide n\'a été produit.');
         }
 
         return $outputPath;
     }
 
+    /**
+     * @param array<int, array<string, mixed>> $signatures
+     * @param array{page: int, xRatio: float, yRatio: float, widthRatio: float}|null $digitalPosition
+     */
+    private function signWithPyHanko(string $sourcePdfPath, array $signatures, ?string $signerName, string $outputPath, ?array $digitalPosition): void
+    {
+        $fpdi = new Fpdi();
+        try {
+            $pageCount = $fpdi->setSourceFile($sourcePdfPath);
+        } finally {
+            $fpdi->cleanUp();
+        }
+
+        if ($pageCount < 1) {
+            throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
+        }
+
+        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+
+        try {
+            if ($normalizedSignatures === [] && ($signerName === null || $signatures !== [])) {
+                throw new \InvalidArgumentException('Aucune signature valide a appliquer.');
+            }
+
+            $this->pyHankoSigner->sign($sourcePdfPath, $outputPath, $normalizedSignatures, $signerName, $digitalPosition, $pageCount);
+        } finally {
+            if ($tempSignaturePaths !== []) {
+                $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
+            }
+        }
+    }
+
     private function signWithFpdi(string $sourcePdfPath, array $signatures, string $outputPath): void
     {
         $pdf = new Fpdi();
-        $pageCount = $pdf->setSourceFile($sourcePdfPath);
+        $pdf->SetMargins(0, 0, 0);
+        $pdf->SetAutoPageBreak(false, 0);
 
-        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
-        if ($normalizedSignatures === []) {
-            throw new \InvalidArgumentException('Aucune signature valide a appliquer.');
+        $pageCount = $pdf->setSourceFile($sourcePdfPath);
+        if ($pageCount < 1) {
+            $pdf->cleanUp();
+            throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
         }
 
+        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+
         try {
+            if ($normalizedSignatures === []) {
+                throw new \InvalidArgumentException('Aucune signature valide a appliquer.');
+            }
+
             for ($pageNumber = 1; $pageNumber <= $pageCount; ++$pageNumber) {
                 $templateId = $pdf->importPage($pageNumber);
                 $templateSize = $pdf->getTemplateSize($templateId);
 
-                $orientation = $templateSize['width'] > $templateSize['height'] ? 'L' : 'P';
-                $pdf->AddPage($orientation, [$templateSize['width'], $templateSize['height']]);
-                $pdf->useTemplate($templateId);
+                $w = (float) $templateSize['width'];
+                $h = (float) $templateSize['height'];
+                $orientation = $w > $h ? 'L' : 'P';
+
+                $pdf->AddPage($orientation, [$w, $h]);
+                $pdf->useTemplate($templateId, 0, 0, $w, $h);
 
                 foreach ($normalizedSignatures as $signature) {
                     if ($signature['pageNumber'] !== $pageNumber) {
                         continue;
                     }
 
-                    $this->renderSignature($pdf, $templateSize['width'], $templateSize['height'], $signature);
+                    $this->renderSignature($pdf, $w, $h, $signature);
                 }
             }
 
             $pdf->Output('F', $outputPath);
         } finally {
+            $pdf->cleanUp();
             if ($tempSignaturePaths !== []) {
                 $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
             }
@@ -80,6 +168,10 @@ final class PdfSigner
      */
     private function signWithDigital(string $sourcePdfPath, array $signatures, string $signerName, string $outputPath, ?array $digitalPosition): void
     {
+        if (!class_exists(\TCPDF::class)) {
+            throw new \RuntimeException('Le moteur classique avec signature numérique nécessite la bibliothèque "tecnickcom/tcpdf". Installez-la via Composer ("composer require tecnickcom/tcpdf:^6.8") ou utilisez le moteur pyHanko.');
+        }
+
         $pdf = new TcpdfFpdi('P', 'mm', 'A4', true, 'UTF-8', false);
         $pdf->setPrintHeader(false);
         $pdf->setPrintFooter(false);
@@ -88,13 +180,12 @@ final class PdfSigner
         $pdf->setAutoPageBreak(false, 0);
 
         $pageCount = $pdf->setSourceFile($sourcePdfPath);
+        if ($pageCount < 1) {
+            $pdf->cleanUp();
+            throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
+        }
 
         [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
-
-        // Digital-only mode is valid (no visual signatures required)
-        if ($normalizedSignatures === [] && $signatures !== []) {
-            throw new \InvalidArgumentException('Aucune signature visuelle valide à appliquer.');
-        }
 
         $lastPageWidth = 210.0;
         $lastPageHeight = 297.0;
@@ -102,6 +193,11 @@ final class PdfSigner
         $pageSizes = [];
 
         try {
+            // Digital-only mode is valid (no visual signatures required)
+            if ($normalizedSignatures === [] && $signatures !== []) {
+                throw new \InvalidArgumentException('Aucune signature visuelle valide à appliquer.');
+            }
+
             for ($pageNumber = 1; $pageNumber <= $pageCount; ++$pageNumber) {
                 $templateId = $pdf->importPage($pageNumber);
                 $templateSize = $pdf->getTemplateSize($templateId);
@@ -131,7 +227,7 @@ final class PdfSigner
                 }
             }
 
-            [$certPem, $privateKeyPem] = $this->generateSelfSignedCert($signerName);
+            [$certPem, $privateKeyPem] = $this->certificateGenerator->generate($signerName);
 
             $pdf->setSignature($certPem, $privateKeyPem, '', '', 2, [
                 'Name' => $signerName,
@@ -170,7 +266,7 @@ final class PdfSigner
 
             // Draw the badge image directly on the page (always visible)
             $badgePath = $this->createSubtleSignatureBadge($signerName, $sigW, $sigH);
-            if ($badgePath !== null) {
+            if ($badgePath !== null && is_file($badgePath)) {
                 try {
                     // Go back to the target page to draw the image
                     $savedPage = $pdf->getPage();
@@ -183,6 +279,10 @@ final class PdfSigner
             }
 
             $pdf->Output($outputPath, 'F');
+        } catch (\Throwable $e) {
+            $pdf->cleanUp();
+
+            throw $e;
         } finally {
             if ($tempSignaturePaths !== []) {
                 $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
@@ -209,20 +309,29 @@ final class PdfSigner
         }
 
         // White background
-        imagefill($img, 0, 0, imagecolorallocate($img, 255, 255, 255));
+        $white = imagecolorallocate($img, 255, 255, 255);
+        if ($white !== false) {
+            imagefill($img, 0, 0, $white);
+        }
 
         // Very light grey tint
         $bg = imagecolorallocate($img, 248, 250, 252);
-        imagefilledrectangle($img, 0, 0, $width - 1, $height - 1, $bg);
+        if ($bg !== false) {
+            imagefilledrectangle($img, 0, 0, $width - 1, $height - 1, $bg);
+        }
 
         // Left accent bar (cyan)
         $accentW = max(3, (int) round($width * 0.018));
         $accent  = imagecolorallocate($img, 34, 211, 238);
-        imagefilledrectangle($img, 0, 0, $accentW, $height - 1, $accent);
+        if ($accent !== false) {
+            imagefilledrectangle($img, 0, 0, $accentW, $height - 1, $accent);
+        }
 
         // Thin outer border
         $border = imagecolorallocate($img, 203, 213, 225);  // slate-300
-        imagerectangle($img, 0, 0, $width - 1, $height - 1, $border);
+        if ($border !== false) {
+            imagerectangle($img, 0, 0, $width - 1, $height - 1, $border);
+        }
 
         // Text colors
         $labelColor = imagecolorallocate($img, 71, 85, 105);   // slate-600
@@ -239,18 +348,24 @@ final class PdfSigner
         $y2 = $y1 + $lineH;
         $y3 = $y2 + $lineH;
 
-        imagestring($img, 2, $textX, $y1, '>> Signature numerique', $labelColor);
-        imagestring($img, 3, $textX, $y2, $this->toAscii($nameDisplay), $nameColor);
-        imagestring($img, 1, $textX, $y3, date('d/m/Y H:i'), $dateColor);
+        if ($labelColor !== false) {
+            imagestring($img, 2, $textX, $y1, '>> Signature numerique', $labelColor);
+        }
+        if ($nameColor !== false) {
+            imagestring($img, 3, $textX, $y2, $this->toAscii($nameDisplay), $nameColor);
+        }
+        if ($dateColor !== false) {
+            imagestring($img, 1, $textX, $y3, date('d/m/Y H:i'), $dateColor);
+        }
 
         $signaturesDir = $this->projectDir . '/var/storage/signatures';
         $this->filesystem->mkdir($signaturesDir);
         $badgePath = sprintf('%s/badge_%s.png', $signaturesDir, bin2hex(random_bytes(8)));
 
-        imagepng($img, $badgePath);
+        $success = imagepng($img, $badgePath);
         imagedestroy($img);
 
-        return $badgePath;
+        return $success && is_file($badgePath) ? $badgePath : null;
     }
 
     private function toAscii(string $text): string
@@ -302,45 +417,15 @@ final class PdfSigner
             'Ñ' => 'N',
         ];
 
-        return strtr($text, $map);
-    }
-
-    /**
-     * @return array{0: string, 1: string}
-     */
-    private function generateSelfSignedCert(string $signerName): array
-    {
-        $config = [
-            'digest_alg' => 'sha256',
-            'private_key_bits' => 2048,
-            'private_key_type' => \OPENSSL_KEYTYPE_RSA,
-        ];
-
-        $dn = [
-            'countryName' => 'FR',
-            'organizationName' => 'PDF Signer',
-            'commonName' => mb_substr($signerName, 0, 64),
-        ];
-
-        $privateKey = openssl_pkey_new($config);
-        if ($privateKey === false) {
-            throw new \RuntimeException('Impossible de générer la clé privée.');
+        $converted = strtr($text, $map);
+        if (function_exists('iconv')) {
+            $transliterated = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $converted);
+            if ($transliterated !== false) {
+                $converted = $transliterated;
+            }
         }
 
-        $csr = openssl_csr_new($dn, $privateKey, $config);
-        if ($csr === false) {
-            throw new \RuntimeException('Impossible de créer la CSR.');
-        }
-
-        $cert = openssl_csr_sign($csr, null, $privateKey, 365, $config);
-        if ($cert === false) {
-            throw new \RuntimeException('Impossible de signer le certificat auto-signé.');
-        }
-
-        openssl_x509_export($cert, $certPem);
-        openssl_pkey_export($privateKey, $privateKeyPem);
-
-        return [$certPem, $privateKeyPem];
+        return preg_replace('/[^\x20-\x7E]/', '', $converted) ?? $converted;
     }
 
     /**
@@ -354,37 +439,51 @@ final class PdfSigner
         $normalized = [];
         $tempPaths = [];
 
-        foreach ($signatures as $signature) {
-            if (!is_array($signature)) {
-                continue;
-            }
+        try {
+            foreach ($signatures as $signature) {
+                if (!is_array($signature)) {
+                    continue;
+                }
 
-            $signatureData = trim((string) ($signature['signatureData'] ?? ''));
-            if ($signatureData === '') {
-                continue;
-            }
+                $signatureData = trim((string) ($signature['signatureData'] ?? ''));
+                if ($signatureData === '') {
+                    continue;
+                }
 
-            $assetKey = sha1($signatureData);
-            if (!isset($signatureAssets[$assetKey])) {
-                $path = $this->createSignatureImageFromDataUri($signatureData);
-                [$width, $height] = getimagesize($path) ?: [500, 200];
+                $assetKey = sha1($signatureData);
+                if (!isset($signatureAssets[$assetKey])) {
+                    $path = $this->createSignatureImageFromDataUri($signatureData);
+                    $tempPaths[] = $path;
 
-                $signatureAssets[$assetKey] = [
-                    'path' => $path,
-                    'aspectRatio' => (float) ($height / max($width, 1)),
+                    $imageInfo = @getimagesize($path);
+                    if ($imageInfo === false || $imageInfo[0] <= 0 || $imageInfo[1] <= 0) {
+                        throw new \InvalidArgumentException('Le fichier de signature ne correspond pas à une image valide.');
+                    }
+
+                    $width = (float) $imageInfo[0];
+                    $height = (float) $imageInfo[1];
+
+                    $signatureAssets[$assetKey] = [
+                        'path' => $path,
+                        'aspectRatio' => $height / $width,
+                    ];
+                }
+
+                $normalized[] = [
+                    'pageNumber' => (int) $this->clamp((float) ($signature['pageNumber'] ?? 1), 1.0, (float) $pageCount),
+                    'xRatio' => $this->clamp((float) ($signature['xRatio'] ?? 0.65), 0.0, 1.0),
+                    'yRatio' => $this->clamp((float) ($signature['yRatio'] ?? 0.75), 0.0, 1.0),
+                    'widthRatio' => $this->clamp((float) ($signature['widthRatio'] ?? 0.3), 0.05, 0.9),
+                    'path' => $signatureAssets[$assetKey]['path'],
+                    'aspectRatio' => $signatureAssets[$assetKey]['aspectRatio'],
                 ];
-
-                $tempPaths[] = $path;
+            }
+        } catch (\Throwable $e) {
+            if ($tempPaths !== []) {
+                $this->filesystem->remove(array_values(array_unique($tempPaths)));
             }
 
-            $normalized[] = [
-                'pageNumber' => (int) $this->clamp((float) ($signature['pageNumber'] ?? 1), 1.0, (float) $pageCount),
-                'xRatio' => $this->clamp((float) ($signature['xRatio'] ?? 0.65), 0.0, 1.0),
-                'yRatio' => $this->clamp((float) ($signature['yRatio'] ?? 0.75), 0.0, 1.0),
-                'widthRatio' => $this->clamp((float) ($signature['widthRatio'] ?? 0.3), 0.05, 0.9),
-                'path' => $signatureAssets[$assetKey]['path'],
-                'aspectRatio' => $signatureAssets[$assetKey]['aspectRatio'],
-            ];
+            throw $e;
         }
 
         return [$normalized, $tempPaths];
@@ -425,23 +524,25 @@ final class PdfSigner
 
     private function createSignatureImageFromDataUri(string $signatureDataUri): string
     {
-        if (!preg_match('#^data:image/(png|jpeg|jpg);base64,#', $signatureDataUri, $matches)) {
+        if (!preg_match('#^data:image/(png|jpeg|jpg);base64,#i', $signatureDataUri, $matches)) {
             throw new \InvalidArgumentException('Le format de signature est invalide.');
         }
 
-        $base64Payload = preg_replace('#^data:image/(png|jpeg|jpg);base64,#', '', $signatureDataUri);
-        $decodedBinary = base64_decode((string) $base64Payload, true);
+        $base64Payload = preg_replace('#^data:image/(png|jpeg|jpg);base64,#i', '', $signatureDataUri);
+        $cleanedPayload = preg_replace('/\s+/', '', (string) $base64Payload);
+        $decodedBinary = base64_decode((string) $cleanedPayload, true);
 
-        if ($decodedBinary === false) {
+        if ($decodedBinary === false || $decodedBinary === '') {
             throw new \InvalidArgumentException('Impossible de decoder la signature.');
         }
 
         $signatureDirectory = $this->projectDir . '/var/storage/signatures';
         $this->filesystem->mkdir($signatureDirectory);
 
-        $extension = in_array($matches[1], ['jpeg', 'jpg'], true) ? 'jpg' : 'png';
+        $extension = in_array(strtolower($matches[1]), ['jpeg', 'jpg'], true) ? 'jpg' : 'png';
         $signaturePath = sprintf('%s/%s.%s', $signatureDirectory, bin2hex(random_bytes(16)), $extension);
-        file_put_contents($signaturePath, $decodedBinary);
+
+        $this->filesystem->dumpFile($signaturePath, $decodedBinary);
 
         return $signaturePath;
     }

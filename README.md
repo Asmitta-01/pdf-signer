@@ -52,6 +52,7 @@ Application web Symfony pour signer des PDF avec une experience visuelle complet
 - PHP >= 8.2
 - Composer >= 2
 - Symfony CLI (recommande pour le serveur local)
+- Python 3 + [pyHanko](https://pyhanko.readthedocs.io) (moteur de signature par défaut)
 
 Extensions PHP utiles:
 
@@ -67,6 +68,14 @@ Depuis le dossier du projet:
 cd app
 composer install
 ```
+
+Installer pyHanko (de préférence dans un virtualenv) :
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install "pyhanko[image-support,opentype]"
+```
+
+Puis renseigner `PDF_SIGN_PYTHON=/chemin/vers/.venv/bin/python` dans `.env.local`.
 
 Puis configurer l'environnement local:
 
@@ -109,10 +118,26 @@ La page d'accueil présente la plateforme. Cliquez sur **Signer un PDF gratuitem
 5. Refaire les étapes 2-4 pour ajouter plusieurs signatures.
 6. Cliquer sur `Générer le PDF signé`.
 
+## Moteurs de signature
+
+- **pyHanko (défaut)** : signature PAdES (`ETSI.CAdES.detached`) en *mise à jour incrémentale*. Le PDF d'origine est conservé octet pour octet (formulaires, signatures existantes, métadonnées) et les images de signature sont ajoutées sans réécriture du document.
+- **Classique** : l'ancien moteur FPDI/TCPDF, qui recrée le PDF page par page.
+
+Variables d'environnement (`.env.local`) :
+
+| Variable | Rôle |
+| --- | --- |
+| `PDF_SIGN_PYTHON` | Interpréteur Python où pyHanko est installé |
+| `PDF_SIGN_P12_PATH` / `PDF_SIGN_P12_PASSWORD` | Certificat PKCS#12 à utiliser. Vide = certificat auto-signé généré à chaque signature |
+| `PDF_SIGN_TSA_URL` | Autorité d'horodatage RFC 3161 (optionnel, niveau PAdES B-T) |
+
+> Un certificat auto-signé n'est pas reconnu par les lecteurs PDF. Pour une valeur légale (eIDAS), fournir un certificat émis par un prestataire de confiance (QTSP).
+
 ## Structure utile
 
 - `src/Controller/PdfSignController.php`: endpoints upload/preview/sign/reset
-- `src/Service/PdfSigner.php`: application des signatures dans le PDF
+- `src/Service/PdfSigner.php`: orchestration de la signature (choix du moteur)
+- `src/Service/PyHankoSigner.php` + `bin/pyhanko_sign.py`: signature PAdES incrémentale via pyHanko
 - `templates/landing/index.html.twig`: landing page et présentation de la plateforme
 - `templates/pdf_sign/index.html.twig`: interface principale
 - `public/js/signature.js`: logique front (preview live, drag/resize, multi-signatures)
