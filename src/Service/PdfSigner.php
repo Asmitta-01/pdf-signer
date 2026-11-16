@@ -568,7 +568,57 @@ final class PdfSigner
         $x = $this->clamp($x, self::PAGE_MARGIN, $xMax);
         $y = $this->clamp($y, self::PAGE_MARGIN, $yMax);
 
-        $pdf->Image($signature['path'], $x, $y, $signatureWidth, $signatureHeight);
+        try {
+            $pdf->Image($signature['path'], $x, $y, $signatureWidth, $signatureHeight);
+        } catch (\Throwable $e) {
+            $normalizedPng = $this->reencodeImageAsCompatiblePng($signature['path']);
+            if ($normalizedPng === null) {
+                throw $e;
+            }
+
+            try {
+                $pdf->Image($normalizedPng, $x, $y, $signatureWidth, $signatureHeight, 'PNG');
+            } finally {
+                $this->filesystem->remove($normalizedPng);
+            }
+        }
+    }
+
+    private function reencodeImageAsCompatiblePng(string $sourceImagePath): ?string
+    {
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagepng')) {
+            return null;
+        }
+
+        $raw = @file_get_contents($sourceImagePath);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+
+        $img = @imagecreatefromstring($raw);
+        if ($img === false) {
+            return null;
+        }
+
+        $signaturesDir = $this->projectDir . '/var/storage/signatures';
+        $this->filesystem->mkdir($signaturesDir);
+        $targetPath = sprintf('%s/norm_%s.png', $signaturesDir, bin2hex(random_bytes(8)));
+
+        imagepalettetotruecolor($img);
+        imagealphablending($img, false);
+        imagesavealpha($img, true);
+        imageinterlace($img, false);
+
+        $ok = imagepng($img, $targetPath);
+        imagedestroy($img);
+
+        if (!$ok || !is_file($targetPath)) {
+            $this->filesystem->remove($targetPath);
+
+            return null;
+        }
+
+        return $targetPath;
     }
 
     private function createSignatureImageFromDataUri(string $signatureDataUri): string
@@ -592,6 +642,19 @@ final class PdfSigner
         $signaturePath = sprintf('%s/%s.%s', $signatureDirectory, bin2hex(random_bytes(16)), $extension);
 
         $this->filesystem->dumpFile($signaturePath, $decodedBinary);
+
+        if ($extension === 'png' && strlen($decodedBinary) >= 29 && substr($decodedBinary, 12, 4) === 'IHDR') {
+            $bitDepth = ord($decodedBinary[24]);
+            $interlace = ord($decodedBinary[28]);
+            if ($bitDepth !== 8 || $interlace !== 0) {
+                $normalized = $this->reencodeImageAsCompatiblePng($signaturePath);
+                if ($normalized !== null) {
+                    $this->filesystem->remove($signaturePath);
+
+                    return $normalized;
+                }
+            }
+        }
 
         return $signaturePath;
     }

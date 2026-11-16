@@ -5,12 +5,15 @@ Reads a JSON job from stdin and writes the result PDF. The original PDF bytes
 are never rewritten: every change is appended as an incremental update.
 """
 import json
+import struct
 import sys
+import uuid
+import zlib
 from io import BytesIO
 
-from PIL import Image, ImageOps
-from pyhanko.pdf_utils import layout
-from pyhanko.pdf_utils.images import PdfImage
+from pyhanko.pdf_utils import generic, layout
+from pyhanko.pdf_utils.content import PdfContent, ResourceType
+from pyhanko.pdf_utils.generic import pdf_name
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.pdf_utils.writer import copy_into_new_writer
@@ -18,8 +21,252 @@ from pyhanko.sign import fields, signers, timestamps
 from pyhanko.stamp import StaticContentStamp, StaticStampStyle, TextStampStyle
 
 
+def _paeth(a, b, c):
+    p = a + b - c
+    pa = abs(p - a)
+    pb = abs(p - b)
+    pc = abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    if pb <= pc:
+        return b
+    return c
+
+
+def _unfilter_png_rows(raw, width, height, bpp):
+    stride = width * bpp
+    expected = height * (stride + 1)
+    if len(raw) < expected:
+        raise ValueError('Truncated PNG IDAT stream')
+    out = bytearray(height * stride)
+    prev = bytearray(stride)
+    pos = 0
+    for y in range(height):
+        ftype = raw[pos]
+        pos += 1
+        row = bytearray(raw[pos:pos + stride])
+        pos += stride
+        if ftype == 0:
+            pass
+        elif ftype == 1:
+            for i in range(bpp, stride):
+                row[i] = (row[i] + row[i - bpp]) & 0xFF
+        elif ftype == 2:
+            for i in range(stride):
+                row[i] = (row[i] + prev[i]) & 0xFF
+        elif ftype == 3:
+            for i in range(stride):
+                left = row[i - bpp] if i >= bpp else 0
+                row[i] = (row[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif ftype == 4:
+            for i in range(stride):
+                left = row[i - bpp] if i >= bpp else 0
+                up = prev[i]
+                up_left = prev[i - bpp] if i >= bpp else 0
+                row[i] = (row[i] + _paeth(left, up, up_left)) & 0xFF
+        else:
+            raise ValueError(f'Unsupported PNG filter: {ftype}')
+        out[y * stride:(y + 1) * stride] = row
+        prev = row
+    return bytes(out)
+
+
+def _read_png_dimensions(data):
+    if len(data) < 29 or data[:8] != b'\x89PNG\r\n\x1a\n' or data[12:16] != b'IHDR':
+        raise ValueError('Invalid PNG header')
+    width, height = struct.unpack('>II', data[16:24])
+    return width, height
+
+
+def _parse_png_to_xobject(data, writer):
+    pos = 8
+    width = height = bit_depth = color_type = interlace = 0
+    plte = b''
+    trns = b''
+    idat = bytearray()
+    while pos + 8 <= len(data):
+        length = struct.unpack('>I', data[pos:pos + 4])[0]
+        ctype = data[pos + 4:pos + 8]
+        chunk = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if ctype == b'IHDR':
+            width, height, bit_depth, color_type, comp, flt, interlace = struct.unpack('>IIBBBBB', chunk)
+            if comp != 0 or flt != 0:
+                raise ValueError('Unsupported PNG compression/filter method')
+        elif ctype == b'PLTE':
+            plte = chunk
+        elif ctype == b'tRNS':
+            trns = chunk
+        elif ctype == b'IDAT':
+            idat.extend(chunk)
+        elif ctype == b'IEND':
+            break
+
+    if interlace != 0:
+        raise ValueError('Interlaced PNG requires Pillow')
+    if bit_depth != 8:
+        raise ValueError(f'PNG bit depth {bit_depth} requires Pillow')
+
+    channels_map = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    if color_type not in channels_map:
+        raise ValueError(f'Unsupported PNG color type {color_type}')
+    bpp = channels_map[color_type]
+    pixels = _unfilter_png_rows(zlib.decompress(bytes(idat)), width, height, bpp)
+
+    alpha_bytes = None
+    if color_type == 0:
+        color_space = pdf_name('/DeviceGray')
+        rgb_bytes = pixels
+    elif color_type == 2:
+        color_space = pdf_name('/DeviceRGB')
+        rgb_bytes = pixels
+    elif color_type == 3:
+        if not plte:
+            raise ValueError('Missing PLTE chunk')
+        color_space = pdf_name('/DeviceRGB')
+        rgb = bytearray(width * height * 3)
+        alpha = bytearray(width * height) if trns else None
+        for idx, pval in enumerate(pixels):
+            off = pval * 3
+            rgb[idx * 3:idx * 3 + 3] = plte[off:off + 3]
+            if alpha is not None:
+                alpha[idx] = trns[pval] if pval < len(trns) else 255
+        rgb_bytes = bytes(rgb)
+        alpha_bytes = bytes(alpha) if alpha is not None else None
+    elif color_type in (4, 6):
+        is_gray = (color_type == 4)
+        color_space = pdf_name('/DeviceGray' if is_gray else '/DeviceRGB')
+        c_count = 1 if is_gray else 3
+        rgb = bytearray(width * height * c_count)
+        alpha = bytearray(width * height)
+        for idx in range(width * height):
+            src = idx * bpp
+            rgb[idx * c_count:(idx + 1) * c_count] = pixels[src:src + c_count]
+            alpha[idx] = pixels[src + c_count]
+        rgb_bytes = bytes(rgb)
+        alpha_bytes = bytes(alpha)
+
+    dict_data = {
+        pdf_name('/Type'): pdf_name('/XObject'),
+        pdf_name('/Subtype'): pdf_name('/Image'),
+        pdf_name('/Width'): generic.NumberObject(width),
+        pdf_name('/Height'): generic.NumberObject(height),
+        pdf_name('/ColorSpace'): color_space,
+        pdf_name('/BitsPerComponent'): generic.NumberObject(8),
+    }
+
+    if alpha_bytes is not None:
+        smask = generic.StreamObject({
+            pdf_name('/Type'): pdf_name('/XObject'),
+            pdf_name('/Subtype'): pdf_name('/Image'),
+            pdf_name('/Width'): generic.NumberObject(width),
+            pdf_name('/Height'): generic.NumberObject(height),
+            pdf_name('/ColorSpace'): pdf_name('/DeviceGray'),
+            pdf_name('/BitsPerComponent'): generic.NumberObject(8),
+        }, stream_data=alpha_bytes)
+        smask.compress()
+        dict_data[pdf_name('/SMask')] = writer.add_object(smask)
+
+    stream = generic.StreamObject(dict_data, stream_data=rgb_bytes)
+    stream.compress()
+    return writer.add_object(stream)
+
+
+def _read_jpeg_header(data):
+    if data[:2] != b'\xff\xd8':
+        raise ValueError('Not a JPEG file')
+    pos = 2
+    width = height = components = 0
+    while pos + 4 <= len(data):
+        if data[pos] != 0xFF:
+            pos += 1
+            continue
+        while pos < len(data) and data[pos] == 0xFF:
+            pos += 1
+        if pos >= len(data):
+            break
+        marker = data[pos]
+        pos += 1
+        if marker in (0xD8, 0xD9, 0x01) or (0xD0 <= marker <= 0xD7):
+            continue
+        if pos + 2 > len(data):
+            break
+        seg_len = struct.unpack('>H', data[pos:pos + 2])[0]
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            if pos + 7 <= len(data):
+                _, height, width, components = struct.unpack('>BHHB', data[pos + 2:pos + 8])
+            break
+        pos += seg_len
+
+    if width <= 0 or height <= 0 or components not in (1, 3, 4):
+        raise ValueError('Unsupported JPEG header')
+    return width, height, components
+
+
+def _parse_jpeg_to_xobject(data, writer):
+    width, height, components = _read_jpeg_header(data)
+    cs_map = {1: '/DeviceGray', 3: '/DeviceRGB', 4: '/DeviceCMYK'}
+    dict_data = {
+        pdf_name('/Type'): pdf_name('/XObject'),
+        pdf_name('/Subtype'): pdf_name('/Image'),
+        pdf_name('/Width'): generic.NumberObject(width),
+        pdf_name('/Height'): generic.NumberObject(height),
+        pdf_name('/ColorSpace'): pdf_name(cs_map[components]),
+        pdf_name('/BitsPerComponent'): generic.NumberObject(8),
+        pdf_name('/Filter'): pdf_name('/DCTDecode'),
+    }
+    if components == 4:
+        dict_data[pdf_name('/Decode')] = generic.ArrayObject([
+            generic.NumberObject(1), generic.NumberObject(0),
+            generic.NumberObject(1), generic.NumberObject(0),
+            generic.NumberObject(1), generic.NumberObject(0),
+            generic.NumberObject(1), generic.NumberObject(0),
+        ])
+    stream = generic.StreamObject(dict_data, encoded_data=data)
+    return writer.add_object(stream)
+
+
+class StdlibPdfImage(PdfContent):
+    """Pure-stdlib PDF image XObject wrapper for environments without Pillow."""
+
+    def __init__(self, image_path, writer=None, box=None):
+        with open(image_path, 'rb') as handle:
+            self._data = handle.read()
+        if self._data[:8] == b'\x89PNG\r\n\x1a\n':
+            self._fmt = 'png'
+            w, h = _read_png_dimensions(self._data)
+        elif self._data[:2] == b'\xff\xd8':
+            self._fmt = 'jpeg'
+            w, h, _ = _read_jpeg_header(self._data)
+        else:
+            raise ValueError('Unsupported image format without Pillow')
+        self.name = str(uuid.uuid4())
+        self._image_ref = None
+        if box is None:
+            box = layout.BoxConstraints(w, h)
+        super().__init__(writer=writer, box=box)
+
+    @property
+    def image_ref(self):
+        assert self.writer is not None
+        if self._image_ref is None or self._image_ref.get_pdf_handler() is not self.writer:
+            if self._fmt == 'png':
+                self._image_ref = _parse_png_to_xobject(self._data, self.writer)
+            else:
+                self._image_ref = _parse_jpeg_to_xobject(self._data, self.writer)
+        return self._image_ref
+
+    def render(self):
+        img_ref_name = '/Img' + self.name
+        self.set_resource(category=ResourceType.XOBJECT, name=pdf_name(img_ref_name), value=self.image_ref)
+        draw = b'%g 0 0 %g 0 0 cm %s Do' % (self.box.width, self.box.height, img_ref_name.encode('ascii'))
+        return b'q %s Q' % draw
+
+
 def load_stamp_image(path):
     """Load an image, normalize EXIF orientation and convert unsupported Pillow modes."""
+    from PIL import Image, ImageOps
+
     img = Image.open(path)
     img.load()
     img = ImageOps.exif_transpose(img)
@@ -30,6 +277,15 @@ def load_stamp_image(path):
         has_alpha = 'A' in img.getbands() or 'transparency' in img.info
         img = img.convert('RGBA' if has_alpha else 'RGB')
     return img
+
+
+def create_stamp_background(path):
+    try:
+        from pyhanko.pdf_utils.images import PdfImage
+
+        return PdfImage(load_stamp_image(path))
+    except ImportError:
+        return StdlibPdfImage(path)
 
 
 def decompress_pdf(data):
@@ -73,7 +329,7 @@ def apply_stamps(data, stamps):
         x, y, w, h = to_box(writer, index, float(stamp['xRatio']), float(stamp['yRatio']), width, height)
         style = StaticStampStyle(
             border_width=0,
-            background=PdfImage(load_stamp_image(stamp['path'])),
+            background=create_stamp_background(stamp['path']),
             background_layout=layout.SimpleBoxLayoutRule(
                 x_align=layout.AxisAlignment.ALIGN_MID,
                 y_align=layout.AxisAlignment.ALIGN_MID,
