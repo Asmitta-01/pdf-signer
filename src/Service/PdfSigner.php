@@ -23,6 +23,7 @@ final class PdfSigner
         private readonly Filesystem $filesystem,
         private readonly PyHankoSigner $pyHankoSigner,
         private readonly SelfSignedCertificateGenerator $certificateGenerator,
+        private readonly ?PdfDecompressor $pdfDecompressor = null,
     ) {}
 
     /**
@@ -316,7 +317,15 @@ final class PdfSigner
             $decompressedPath = sprintf('%s/fpdi_%s.pdf', $tmpDir, bin2hex(random_bytes(16)));
 
             try {
-                $this->pyHankoSigner->decompressForFpdi($sourcePdfPath, $decompressedPath);
+                try {
+                    ($this->pdfDecompressor ?? new PdfDecompressor($this->filesystem))->decompress($sourcePdfPath, $decompressedPath);
+                } catch (\Throwable $phpDecompressError) {
+                    try {
+                        $this->pyHankoSigner->decompressForFpdi($sourcePdfPath, $decompressedPath);
+                    } catch (\Throwable) {
+                        throw $phpDecompressError;
+                    }
+                }
 
                 return [$pdf->setSourceFile($decompressedPath), $decompressedPath];
             } catch (\Throwable $decompressError) {
