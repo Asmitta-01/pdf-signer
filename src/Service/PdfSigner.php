@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service;
 
 use setasign\Fpdi\Fpdi;
+use setasign\Fpdi\PdfParser\CrossReference\CrossReferenceException;
 use setasign\Fpdi\Tcpdf\Fpdi as TcpdfFpdi;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\Filesystem\Filesystem;
@@ -50,10 +51,18 @@ final class PdfSigner
                 } catch (\RuntimeException $e) {
                     if (str_contains($e->getMessage(), 'pyHanko a échoué')) {
                         // Fallback automatically to classic engine if Python / pyHanko fails
-                        if ($signerName !== null) {
-                            $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
-                        } else {
-                            $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
+                        try {
+                            if ($signerName !== null) {
+                                $this->signWithDigital($sourcePdfPath, $signatures, $signerName, $outputPath, $digitalPosition);
+                            } else {
+                                $this->signWithFpdi($sourcePdfPath, $signatures, $outputPath);
+                            }
+                        } catch (\Throwable $fallbackError) {
+                            throw new \RuntimeException(
+                                sprintf('%s (le repli classique a également échoué : %s)', $e->getMessage(), $fallbackError->getMessage()),
+                                0,
+                                $fallbackError,
+                            );
                         }
                     } else {
                         throw $e;
@@ -89,25 +98,14 @@ final class PdfSigner
      */
     private function signWithPyHanko(string $sourcePdfPath, array $signatures, ?string $signerName, string $outputPath, ?array $digitalPosition): void
     {
-        $fpdi = new Fpdi();
-        try {
-            $pageCount = $fpdi->setSourceFile($sourcePdfPath);
-        } finally {
-            $fpdi->cleanUp();
-        }
-
-        if ($pageCount < 1) {
-            throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
-        }
-
-        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures);
 
         try {
             if ($normalizedSignatures === [] && ($signerName === null || $signatures !== [])) {
                 throw new \InvalidArgumentException('Aucune signature valide a appliquer.');
             }
 
-            $this->pyHankoSigner->sign($sourcePdfPath, $outputPath, $normalizedSignatures, $signerName, $digitalPosition, $pageCount);
+            $this->pyHankoSigner->sign($sourcePdfPath, $outputPath, $normalizedSignatures, $signerName, $digitalPosition);
         } finally {
             if ($tempSignaturePaths !== []) {
                 $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
@@ -121,15 +119,15 @@ final class PdfSigner
         $pdf->SetMargins(0, 0, 0);
         $pdf->SetAutoPageBreak(false, 0);
 
-        $pageCount = $pdf->setSourceFile($sourcePdfPath);
-        if ($pageCount < 1) {
-            $pdf->cleanUp();
-            throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
-        }
-
-        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+        [$pageCount, $decompressedPath] = $this->openSourcePdfForFpdi($pdf, $sourcePdfPath);
+        $tempSignaturePaths = [];
 
         try {
+            if ($pageCount < 1) {
+                throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
+            }
+
+            [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
             if ($normalizedSignatures === []) {
                 throw new \InvalidArgumentException('Aucune signature valide a appliquer.');
             }
@@ -157,8 +155,12 @@ final class PdfSigner
             $pdf->Output('F', $outputPath);
         } finally {
             $pdf->cleanUp();
-            if ($tempSignaturePaths !== []) {
-                $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
+            $pathsToRemove = $tempSignaturePaths;
+            if ($decompressedPath !== null) {
+                $pathsToRemove[] = $decompressedPath;
+            }
+            if ($pathsToRemove !== []) {
+                $this->filesystem->remove(array_values(array_unique($pathsToRemove)));
             }
         }
     }
@@ -179,13 +181,8 @@ final class PdfSigner
         $pdf->SetMargins(0, 0, 0, true);
         $pdf->setAutoPageBreak(false, 0);
 
-        $pageCount = $pdf->setSourceFile($sourcePdfPath);
-        if ($pageCount < 1) {
-            $pdf->cleanUp();
-            throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
-        }
-
-        [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+        [$pageCount, $decompressedPath] = $this->openSourcePdfForFpdi($pdf, $sourcePdfPath);
+        $tempSignaturePaths = [];
 
         $lastPageWidth = 210.0;
         $lastPageHeight = 297.0;
@@ -193,6 +190,12 @@ final class PdfSigner
         $pageSizes = [];
 
         try {
+            if ($pageCount < 1) {
+                throw new \InvalidArgumentException('Le fichier PDF source ne contient aucune page.');
+            }
+
+            [$normalizedSignatures, $tempSignaturePaths] = $this->normalizeSignatures($signatures, $pageCount);
+
             // Digital-only mode is valid (no visual signatures required)
             if ($normalizedSignatures === [] && $signatures !== []) {
                 throw new \InvalidArgumentException('Aucune signature visuelle valide à appliquer.');
@@ -284,8 +287,41 @@ final class PdfSigner
 
             throw $e;
         } finally {
-            if ($tempSignaturePaths !== []) {
-                $this->filesystem->remove(array_values(array_unique($tempSignaturePaths)));
+            $pathsToRemove = $tempSignaturePaths;
+            if ($decompressedPath !== null) {
+                $pathsToRemove[] = $decompressedPath;
+            }
+            if ($pathsToRemove !== []) {
+                $this->filesystem->remove(array_values(array_unique($pathsToRemove)));
+            }
+        }
+    }
+
+    /**
+     * Opens the source PDF in FPDI, transparently decompressing PDF 1.5+ streams via pyHanko if needed.
+     *
+     * @return array{0: int, 1: string|null} Page count and optional temporary decompressed PDF path
+     */
+    private function openSourcePdfForFpdi(Fpdi|TcpdfFpdi $pdf, string $sourcePdfPath): array
+    {
+        try {
+            return [$pdf->setSourceFile($sourcePdfPath), null];
+        } catch (CrossReferenceException $e) {
+            if (!str_contains($e->getMessage(), 'compression technique')) {
+                throw $e;
+            }
+
+            $tmpDir = $this->projectDir . '/var/storage/tmp';
+            $this->filesystem->mkdir($tmpDir);
+            $decompressedPath = sprintf('%s/fpdi_%s.pdf', $tmpDir, bin2hex(random_bytes(16)));
+
+            try {
+                $this->pyHankoSigner->decompressForFpdi($sourcePdfPath, $decompressedPath);
+
+                return [$pdf->setSourceFile($decompressedPath), $decompressedPath];
+            } catch (\Throwable $decompressError) {
+                $this->filesystem->remove($decompressedPath);
+                throw $decompressError;
             }
         }
     }
@@ -433,7 +469,7 @@ final class PdfSigner
      *
      * @return array{0: array<int, array{pageNumber: int, xRatio: float, yRatio: float, widthRatio: float, path: string, aspectRatio: float}>, 1: array<int, string>}
      */
-    private function normalizeSignatures(array $signatures, int $pageCount): array
+    private function normalizeSignatures(array $signatures, ?int $pageCount = null): array
     {
         $signatureAssets = [];
         $normalized = [];
@@ -463,14 +499,27 @@ final class PdfSigner
                     $width = (float) $imageInfo[0];
                     $height = (float) $imageInfo[1];
 
+                    if ($imageInfo[2] === \IMAGETYPE_JPEG && function_exists('exif_read_data')) {
+                        $exif = @exif_read_data($path);
+                        $orientation = is_array($exif) ? (int) ($exif['Orientation'] ?? 1) : 1;
+                        if (in_array($orientation, [5, 6, 7, 8], true)) {
+                            [$width, $height] = [$height, $width];
+                        }
+                    }
+
                     $signatureAssets[$assetKey] = [
                         'path' => $path,
                         'aspectRatio' => $height / $width,
                     ];
                 }
 
+                $rawPageNumber = (int) ($signature['pageNumber'] ?? 1);
+                $pageNumber = $pageCount !== null
+                    ? (int) $this->clamp((float) $rawPageNumber, 1.0, (float) $pageCount)
+                    : max(1, $rawPageNumber);
+
                 $normalized[] = [
-                    'pageNumber' => (int) $this->clamp((float) ($signature['pageNumber'] ?? 1), 1.0, (float) $pageCount),
+                    'pageNumber' => $pageNumber,
                     'xRatio' => $this->clamp((float) ($signature['xRatio'] ?? 0.65), 0.0, 1.0),
                     'yRatio' => $this->clamp((float) ($signature['yRatio'] ?? 0.75), 0.0, 1.0),
                     'widthRatio' => $this->clamp((float) ($signature['widthRatio'] ?? 0.3), 0.05, 0.9),
@@ -490,7 +539,7 @@ final class PdfSigner
     }
 
     /**
-     * @param \setasign\Fpdi\Fpdi|\setasign\Fpdi\TcpdfFpdi $pdf
+     * @param \setasign\Fpdi\Fpdi|\setasign\Fpdi\Tcpdf\Fpdi $pdf
      * @param array{pageNumber: int, xRatio: float, yRatio: float, widthRatio: float, path: string, aspectRatio: float} $signature
      */
     private function renderSignature(Fpdi|TcpdfFpdi $pdf, float $pageWidth, float $pageHeight, array $signature): void

@@ -33,7 +33,7 @@ final class PyHankoSigner
      * @param array<int, array{pageNumber: int, xRatio: float, yRatio: float, widthRatio: float, path: string, aspectRatio: float}> $stamps
      * @param array{page: int, xRatio: float, yRatio: float, widthRatio: float}|null $digitalPosition
      */
-    public function sign(string $sourcePdfPath, string $outputPath, array $stamps, ?string $signerName, ?array $digitalPosition, int $pageCount): void
+    public function sign(string $sourcePdfPath, string $outputPath, array $stamps, ?string $signerName, ?array $digitalPosition, ?int $pageCount = null): void
     {
         $job = [
             'input' => $sourcePdfPath,
@@ -76,27 +76,52 @@ final class PyHankoSigner
                 ];
             }
 
-            $pythonBinary = $this->pythonBinary;
-            if ($pythonBinary === 'python3' && \PHP_OS_FAMILY === 'Windows') {
-                $pythonBinary = 'python';
-            }
-
-            $process = new Process(
-                [$pythonBinary, $this->projectDir . '/bin/pyhanko_sign.py'],
-                null,
-                null,
-                json_encode($job, JSON_THROW_ON_ERROR),
-                120,
-            );
-            $process->run();
-
-            if (!$process->isSuccessful() || !is_file($outputPath)) {
-                throw new \RuntimeException('pyHanko a échoué : ' . trim($process->getErrorOutput()));
-            }
+            $this->runPythonHelper($job, $outputPath);
         } finally {
             if ($temporaryP12 !== null) {
                 $this->filesystem->remove($temporaryP12);
             }
+        }
+    }
+
+    /**
+     * Rewrites a PDF 1.5+ (XRefStream / ObjStm) without compressed streams so FPDI can parse it.
+     */
+    public function decompressForFpdi(string $sourcePdfPath, string $outputPath): void
+    {
+        $this->runPythonHelper([
+            'action' => 'decompress',
+            'input' => $sourcePdfPath,
+            'output' => $outputPath,
+        ], $outputPath);
+    }
+
+    /**
+     * @param array<string, mixed> $job
+     */
+    private function runPythonHelper(array $job, string $outputPath): void
+    {
+        $pythonBinary = $this->pythonBinary;
+        if ($pythonBinary === 'python3' && \PHP_OS_FAMILY === 'Windows') {
+            $pythonBinary = 'python';
+        }
+
+        $process = new Process(
+            [$pythonBinary, $this->projectDir . '/bin/pyhanko_sign.py'],
+            null,
+            null,
+            json_encode($job, JSON_THROW_ON_ERROR),
+            120,
+        );
+        $process->run();
+
+        if (!$process->isSuccessful() || !is_file($outputPath)) {
+            $errorDetail = trim($process->getErrorOutput());
+            if ($errorDetail === '') {
+                $errorDetail = trim($process->getOutput());
+            }
+
+            throw new \RuntimeException('pyHanko a échoué : ' . $errorDetail);
         }
     }
 

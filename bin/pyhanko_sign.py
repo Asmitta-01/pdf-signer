@@ -8,11 +8,37 @@ import json
 import sys
 from io import BytesIO
 
+from PIL import Image, ImageOps
 from pyhanko.pdf_utils import layout
 from pyhanko.pdf_utils.images import PdfImage
 from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+from pyhanko.pdf_utils.reader import PdfFileReader
+from pyhanko.pdf_utils.writer import copy_into_new_writer
 from pyhanko.sign import fields, signers, timestamps
 from pyhanko.stamp import StaticContentStamp, StaticStampStyle, TextStampStyle
+
+
+def load_stamp_image(path):
+    """Load an image, normalize EXIF orientation and convert unsupported Pillow modes."""
+    img = Image.open(path)
+    img.load()
+    img = ImageOps.exif_transpose(img)
+    if img.mode == 'P':
+        if 'transparency' in img.info or (img.palette and img.palette.mode != 'RGB'):
+            img = img.convert('RGBA')
+    elif img.mode not in ('RGB', 'RGBA', 'L', 'LA'):
+        has_alpha = 'A' in img.getbands() or 'transparency' in img.info
+        img = img.convert('RGBA' if has_alpha else 'RGB')
+    return img
+
+
+def decompress_pdf(data):
+    """Rewrite a PDF 1.5+ (XRefStream / ObjStm) without compressed xref/object streams for FPDI."""
+    reader = PdfFileReader(BytesIO(data))
+    writer = copy_into_new_writer(reader, {'stream_xrefs': False})
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
 def page_size(writer, index):
@@ -47,7 +73,7 @@ def apply_stamps(data, stamps):
         x, y, w, h = to_box(writer, index, float(stamp['xRatio']), float(stamp['yRatio']), width, height)
         style = StaticStampStyle(
             border_width=0,
-            background=PdfImage(stamp['path']),
+            background=PdfImage(load_stamp_image(stamp['path'])),
             background_layout=layout.SimpleBoxLayoutRule(
                 x_align=layout.AxisAlignment.ALIGN_MID,
                 y_align=layout.AxisAlignment.ALIGN_MID,
@@ -70,7 +96,9 @@ def sign(data, digital, p12_path, p12_password, tsa_url):
 
     writer = IncrementalPdfFileWriter(BytesIO(data))
     page_count = int(writer.root['/Pages']['/Count'])
-    index = min(max(int(digital['page']) - 1, 0), page_count - 1)
+    raw_page = digital.get('page')
+    page_num = int(raw_page) if raw_page is not None else page_count
+    index = min(max(page_num - 1, 0), page_count - 1)
     pw, _, _, _ = page_size(writer, index)
     width = max(60.0, pw * float(digital['widthRatio']))
     height = max(24.0, width * 0.28)
@@ -108,10 +136,13 @@ def main():
     with open(job['input'], 'rb') as handle:
         data = handle.read()
 
-    if job.get('stamps'):
-        data = apply_stamps(data, job['stamps'])
-    if job.get('digital'):
-        data = sign(data, job['digital'], job['p12'], job.get('p12Password', ''), job.get('tsaUrl'))
+    if job.get('action') == 'decompress':
+        data = decompress_pdf(data)
+    else:
+        if job.get('stamps'):
+            data = apply_stamps(data, job['stamps'])
+        if job.get('digital'):
+            data = sign(data, job['digital'], job['p12'], job.get('p12Password', ''), job.get('tsaUrl'))
 
     with open(job['output'], 'wb') as handle:
         handle.write(data)
